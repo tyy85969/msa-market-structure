@@ -13,6 +13,9 @@
 - Added the installable Python package scaffold and import test.
 - Added minimal Python 3.11 CI.
 - Added GitHub issue and pull request collaboration templates.
+- Defined the canonical market-data contract and immutable `CanonicalBar`.
+- Added stable `Timeframe`, volume-type, and available-time semantics.
+- Added deterministic contract validation and serialization tests.
 
 ### Added
 - 初始化 MSA 项目仓库。
