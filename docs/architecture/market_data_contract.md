@@ -108,6 +108,21 @@ The stable approved codes are:
 
 Code must use `Timeframe` values rather than scattered arbitrary strings.
 
+For M15, M30, H1, H2, H4, and H12, `fixed_duration` defines only the
+elapsed length of each bar. It does not define the alignment anchor that
+determines where one resampled interval starts and the next one ends.
+
+C-001C must explicitly select and document an alignment policy when it later
+implements resampling. Approved forms may include source-native alignment,
+session-open alignment, a documented UTC anchor, or another explicitly
+approved anchor. C-001C must not silently align intervals to UTC midnight, the
+Unix epoch, a Pandas default `origin`, or an undocumented broker midnight.
+
+For every resampled `CanonicalBar`, the alignment policy used to derive its
+boundaries must be recorded in `boundary_policy` or equivalent traceable
+provenance. This requirement defines the contract only; C-001A does not
+implement resampling or choose the first XAUUSD alignment policy.
+
 ## 8. Daily and Weekly Boundary Policy
 
 D and W are calendar/session-bound periods, not fixed UTC windows. Their
@@ -197,6 +212,8 @@ signal, execution, or optimization logic.
 
 - Which source/broker and symbol mapping will C-001B approve for the first
   XAUUSD dataset?
+- Which alignment/anchor policy will define M30/H1/H2/H4/H12 resampling
+  boundaries for the first XAUUSD dataset?
 - Which named session/calendar policy will define XAUUSD D and W boundaries?
 - How will adapters record source corrections or late revisions without
   silently overwriting canonical history?
