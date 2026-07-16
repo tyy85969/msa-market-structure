@@ -8,13 +8,13 @@ Reference screenshots are used only to formulate independent MSA research questi
 
 These statements describe visible screenshot content only:
 
-- multiple apparent structural boundaries are shown at different visual scales;
-- yellow lines appear as a prominent primary-structure layer;
-- blue or cyan lines appear as a higher-timeframe reference layer;
-- green lines appear as a separately controllable candidate-like layer in some views;
-- short lines appear to represent local structure;
-- some images show several levels near the same price region;
-- ordered screenshots suggest that displayed structure can evolve as the market progresses.
+- multiple horizontal or near-horizontal lines are visible at different lengths and vertical positions;
+- yellow lines are visible in the chart area;
+- blue or cyan lines are visible in the chart area;
+- green lines are visible in some views and absent from others;
+- short horizontal lines are visible near portions of the price trace;
+- some images show several colored lines at nearby vertical positions;
+- the visible line sets, endpoints, or positions differ between some ordered screenshots.
 
 Observed appearance does not establish the rule that generated it.
 
@@ -22,7 +22,11 @@ Observed appearance does not establish the rule that generated it.
 
 These interpretations are plausible across multiple visible examples but are not proven:
 
-- the display likely separates primary, higher-timeframe, candidate, and local visual roles;
+- yellow likely denotes a primary-structure role;
+- blue or cyan likely denotes a higher-timeframe reference role;
+- green likely denotes an optional candidate or forming-structure role;
+- short lines likely denote a local or micro-structure role;
+- the display likely separates primary, higher-timeframe, candidate, and local visual roles by color and line length;
 - some grouped screenshots likely represent consecutive market states, different zoom levels, different timeframes, or module-toggle states;
 - the design likely emphasizes multi-scale alignment around persistent upper and lower boundaries.
 
