@@ -1,0 +1,56 @@
+name: Research task
+description: Propose a scoped, reproducible MSA research task.
+title: "[RESEARCH] "
+labels:
+  - research
+body:
+  - type: textarea
+    id: research-question
+    attributes:
+      label: Research question
+      description: State one falsifiable research question.
+    validations:
+      required: true
+  - type: input
+    id: hypothesis-id
+    attributes:
+      label: Hypothesis ID
+      description: Reference an existing H-XXX identifier or explain why a new one is needed.
+      placeholder: H-XXX
+    validations:
+      required: true
+  - type: textarea
+    id: scope
+    attributes:
+      label: Scope
+      description: Define included and excluded modules.
+    validations:
+      required: true
+  - type: textarea
+    id: data
+    attributes:
+      label: Data
+      description: Describe symbol, time range, timezone, splits, and provenance.
+    validations:
+      required: true
+  - type: textarea
+    id: metrics
+    attributes:
+      label: Metrics
+      description: List structural metrics and decision thresholds.
+    validations:
+      required: true
+  - type: textarea
+    id: no-lookahead-risks
+    attributes:
+      label: No-lookahead risks
+      description: Explain OriginTime, ConfirmTime, MTF, replay, and backplot risks.
+    validations:
+      required: true
+  - type: textarea
+    id: acceptance-criteria
+    attributes:
+      label: Acceptance criteria
+      description: Define reproducible evidence required to close this task.
+    validations:
+      required: true

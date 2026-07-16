@@ -1,0 +1,41 @@
+name: Bug report
+description: Report reproducible MSA behavior that differs from the documented contract.
+title: "[BUG] "
+labels:
+  - bug
+body:
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: Include commit, Python or Pine version, operating environment, symbol, and timeframe.
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Reproduction
+      description: Provide minimal deterministic reproduction steps and data provenance.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected
+      description: Describe the behavior required by the current contract.
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual
+      description: Describe the observed behavior and attach minimal evidence.
+    validations:
+      required: true
+  - type: textarea
+    id: lookahead-repaint
+    attributes:
+      label: Lookahead/Repaint relevance
+      description: State whether confirmation time, historical backplot, MTF availability, or replay differs.
+    validations:
+      required: true

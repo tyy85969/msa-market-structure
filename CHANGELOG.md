@@ -4,6 +4,16 @@
 
 ## [Unreleased]
 
+### Phase 0 / Engineering Foundation
+- Added repository governance and contribution rules.
+- Added architecture documentation and a six-record ADR framework.
+- Added the hypothesis registry and research document framework.
+- Added evidence classification, screenshot indexing, and evidence matrix conventions.
+- Added validation and strict no-lookahead frameworks.
+- Added the installable Python package scaffold and import test.
+- Added minimal Python 3.11 CI.
+- Added GitHub issue and pull request collaboration templates.
+
 ### Added
 - 初始化 MSA 项目仓库。
 - 确立 XAUUSD 为第一研究市场。

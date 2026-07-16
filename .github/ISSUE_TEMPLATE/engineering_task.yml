@@ -1,0 +1,48 @@
+name: Engineering task
+description: Define a bounded engineering change for MSA.
+title: "[ENGINEERING] "
+labels:
+  - engineering
+body:
+  - type: textarea
+    id: objective
+    attributes:
+      label: Objective
+      description: State the concrete engineering outcome.
+    validations:
+      required: true
+  - type: textarea
+    id: dependencies
+    attributes:
+      label: Dependencies
+      description: List prerequisite issues, ADRs, hypotheses, data, or tools.
+    validations:
+      required: true
+  - type: textarea
+    id: allowed-files
+    attributes:
+      label: Allowed files
+      description: List directories or files that may be changed.
+    validations:
+      required: true
+  - type: textarea
+    id: tests
+    attributes:
+      label: Tests
+      description: Define required automated and manual validation.
+    validations:
+      required: true
+  - type: textarea
+    id: acceptance-criteria
+    attributes:
+      label: Acceptance criteria
+      description: Provide a verifiable completion checklist.
+    validations:
+      required: true
+  - type: textarea
+    id: out-of-scope
+    attributes:
+      label: Out of scope
+      description: Explicitly list work that must not be included.
+    validations:
+      required: true
