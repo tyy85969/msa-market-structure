@@ -1,0 +1,34 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "msa-market-structure"
+version = "0.1.0"
+description = "Research foundation for Multi-Scale Structure Alignment."
+readme = "README.md"
+requires-python = ">=3.11"
+authors = [
+  { name = "MSA Contributors" },
+]
+classifiers = [
+  "Development Status :: 2 - Pre-Alpha",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.11",
+]
+dependencies = []
+
+[project.optional-dependencies]
+test = [
+  "pytest>=7.4",
+]
+
+[tool.setuptools]
+package-dir = { "" = "src/python" }
+
+[tool.setuptools.packages.find]
+where = ["src/python"]
+
+[tool.pytest.ini_options]
+addopts = "-ra"
+testpaths = ["tests"]
