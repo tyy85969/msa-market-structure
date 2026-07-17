@@ -20,6 +20,11 @@
 - Added explicit symbol mapping, timestamp semantics, and timezone conversion.
 - Added strict duplicate, order, OHLCV, and fixed-interval gap validation.
 - Added immutable, traceable market-data quality reporting.
+- Added explicit multi-timeframe OHLCV resampling.
+- Added fixed-anchor and D/W boundary policy interfaces.
+- Added contiguous and explicit-slot coverage validation.
+- Added causal HTF available-time semantics.
+- Added batch and chronological replay equivalence tests.
 
 ### Added
 - 初始化 MSA 项目仓库。
