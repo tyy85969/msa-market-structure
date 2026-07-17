@@ -167,6 +167,22 @@ def test_all_public_value_and_domain_objects_round_trip(
     assert model_type.from_dict(payload) == instance  # type: ignore[attr-defined]
 
 
+def test_active_box_round_trip_preserves_lifecycle_event_bounds() -> None:
+    box = build_objects()[7][1]
+    payload = box.to_dict()  # type: ignore[attr-defined]
+    payload["status"] = ActiveBoxStatus.RETIRED.value
+    payload["retired_time"] = payload["confirm_time"]
+    restored = ActiveBox.from_dict(payload)
+    assert (
+        restored.origin_time
+        <= restored.frozen_time
+        <= restored.retired_time
+        <= restored.confirm_time
+        <= restored.as_of_time
+    )
+    assert restored.to_dict() == payload
+
+
 @pytest.mark.parametrize(
     ("model_type", "instance"),
     build_objects(),

@@ -187,11 +187,13 @@ times, and provenance. Both boundary symbols must match the box; lower and
 upper sides are enforced; both must already be confirmed by box ConfirmTime.
 
 The finite Decimal `selection_price` must lie inclusively between the inner
-edges `lower.price_range.high` and `upper.price_range.low`. Any supplied
-`frozen_time` or `retired_time` must be no later than box ConfirmTime. `FROZEN`
-requires an explicit frozen time. `RETIRED` requires an explicit retired time,
-while other statuses reject a retired time. When both event times are present,
-`frozen_time <= retired_time`.
+edges `lower.price_range.high` and `upper.price_range.low`. A supplied frozen
+event must satisfy `origin_time <= frozen_time <= confirm_time`; a supplied
+retirement event must satisfy
+`origin_time <= retired_time <= confirm_time`. `FROZEN` requires an explicit
+frozen time. `RETIRED` requires an explicit retired time but does not require a
+freeze event, while other statuses reject a retired time. When both event times
+are present, `frozen_time <= retired_time`.
 
 C-002 does not create versions, replace, freeze, invalidate, or retire a box,
 and it implements no lifecycle transition algorithm. It only validates a

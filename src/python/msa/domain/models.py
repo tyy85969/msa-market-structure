@@ -1038,9 +1038,17 @@ class ActiveBox:
             raise DomainValidationError(
                 "ActiveBox.retired_time must be None unless status is RETIRED"
             )
+        if frozen is not None and frozen < origin:
+            raise DomainValidationError(
+                "ActiveBox.frozen_time must be >= ActiveBox.origin_time"
+            )
         if frozen is not None and frozen > confirm:
             raise DomainValidationError(
                 "ActiveBox.frozen_time must be <= ActiveBox.confirm_time"
+            )
+        if retired is not None and retired < origin:
+            raise DomainValidationError(
+                "ActiveBox.retired_time must be >= ActiveBox.origin_time"
             )
         if retired is not None and retired > confirm:
             raise DomainValidationError(

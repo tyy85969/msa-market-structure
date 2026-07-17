@@ -158,6 +158,22 @@ def test_frozen_box_requires_frozen_time() -> None:
         active_box(status=ActiveBoxStatus.FROZEN)
 
 
+def test_active_box_rejects_frozen_time_before_origin() -> None:
+    with pytest.raises(DomainValidationError, match="frozen_time.*origin_time"):
+        active_box(
+            status=ActiveBoxStatus.FROZEN,
+            frozen_time=ORIGIN - timedelta(microseconds=1),
+        )
+
+
+def test_frozen_time_may_equal_origin_time() -> None:
+    result = active_box(
+        status=ActiveBoxStatus.FROZEN,
+        frozen_time=ORIGIN,
+    )
+    assert result.frozen_time == result.origin_time
+
+
 def test_active_box_rejects_frozen_time_after_confirm() -> None:
     with pytest.raises(DomainValidationError, match="frozen_time"):
         active_box(frozen_time=CONFIRM + timedelta(microseconds=1))
@@ -187,6 +203,22 @@ def test_retired_time_may_equal_confirm_time() -> None:
     assert result.retired_time == CONFIRM
 
 
+def test_active_box_rejects_retired_time_before_origin() -> None:
+    with pytest.raises(DomainValidationError, match="retired_time.*origin_time"):
+        active_box(
+            status=ActiveBoxStatus.RETIRED,
+            retired_time=ORIGIN - timedelta(microseconds=1),
+        )
+
+
+def test_retired_time_may_equal_origin_time() -> None:
+    result = active_box(
+        status=ActiveBoxStatus.RETIRED,
+        retired_time=ORIGIN,
+    )
+    assert result.retired_time == result.origin_time
+
+
 def test_active_box_rejects_frozen_time_after_retired_time() -> None:
     with pytest.raises(DomainValidationError, match="frozen_time"):
         active_box(
@@ -194,6 +226,32 @@ def test_active_box_rejects_frozen_time_after_retired_time() -> None:
             frozen_time=CONFIRM,
             retired_time=CONFIRM - timedelta(microseconds=1),
         )
+
+
+def test_active_box_accepts_complete_lifecycle_event_ordering() -> None:
+    result = active_box(
+        status=ActiveBoxStatus.RETIRED,
+        frozen_time=ORIGIN + timedelta(hours=1),
+        retired_time=CONFIRM - timedelta(hours=1),
+        as_of_time=CONFIRM + timedelta(hours=1),
+    )
+    assert (
+        result.origin_time
+        <= result.frozen_time
+        <= result.retired_time
+        <= result.confirm_time
+        <= result.as_of_time
+    )
+
+
+def test_retired_box_does_not_require_frozen_time() -> None:
+    result = active_box(
+        status=ActiveBoxStatus.RETIRED,
+        frozen_time=None,
+        retired_time=CONFIRM,
+    )
+    assert result.frozen_time is None
+    assert result.retired_time == CONFIRM
 
 
 def test_active_box_rejects_as_of_before_confirm() -> None:
