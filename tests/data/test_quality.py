@@ -92,6 +92,7 @@ def test_continuous_fixed_duration_data_has_no_gap() -> None:
     )
 
     assert report.gap_count == 0
+    assert report.overlap_count == 0
     assert report.warnings == ()
     assert not report.has_errors
 
@@ -104,6 +105,7 @@ def test_interval_gap_is_reported_but_not_filled() -> None:
     )
 
     assert result.quality_report.gap_count == 1
+    assert result.quality_report.overlap_count == 0
     assert len(result.bars) == 2
     warning = result.quality_report.warnings[0]
     assert warning.code == "interval_gap"
@@ -134,6 +136,7 @@ def test_identical_duplicate_is_rejected_in_strict_mode() -> None:
     report = exc_info.value.report
     assert report.duplicate_count == 1
     assert report.conflicting_duplicate_count == 0
+    assert report.overlap_count == 0
     assert report.errors[0].code == "duplicate"
     assert report.errors[0].row_number == 2
 
@@ -170,9 +173,41 @@ def test_out_of_order_input_is_rejected_without_sorting() -> None:
 
     report = exc_info.value.report
     assert report.out_of_order_count == 1
+    assert report.overlap_count == 0
     assert report.errors[0].row_number == 2
     assert report.earliest_timestamp == datetime(2026, 1, 2, 8, 0, tzinfo=UTC)
     assert report.latest_timestamp == datetime(2026, 1, 2, 8, 15, tzinfo=UTC)
+
+
+def test_overlapping_fixed_intervals_are_reported_as_errors() -> None:
+    report = validate_bar_sequence(
+        [bar_at(0), bar_at(5)],
+        source="quality-test",
+        timeframe=Timeframe.M15,
+    )
+
+    assert report.overlap_count == 1
+    assert report.gap_count == 0
+    assert report.warnings == ()
+    issue = report.errors[0]
+    assert issue.code == "interval_overlap"
+    assert issue.row_number == 2
+    assert issue.raw_value == "2026-01-02T08:05:00+00:00"
+    assert "previous.end_time 2026-01-02T08:15:00+00:00" in issue.reason
+
+
+def test_strict_load_rejects_overlapping_fixed_intervals() -> None:
+    with pytest.raises(DataLoadError) as exc_info:
+        load_records(
+            [
+                record("2026-01-02 08:00:00"),
+                record("2026-01-02 08:05:00", close="2002"),
+            ],
+            config(),
+        )
+
+    assert exc_info.value.report.overlap_count == 1
+    assert exc_info.value.report.errors[0].code == "interval_overlap"
 
 
 def test_quality_report_is_immutable() -> None:

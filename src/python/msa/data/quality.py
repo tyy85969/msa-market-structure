@@ -56,6 +56,7 @@ class DataQualityReport:
     duplicate_count: int
     conflicting_duplicate_count: int
     out_of_order_count: int
+    overlap_count: int
     gap_count: int
     invalid_ohlc_count: int
     invalid_timestamp_count: int
@@ -77,6 +78,7 @@ class DataQualityReport:
             "duplicate_count",
             "conflicting_duplicate_count",
             "out_of_order_count",
+            "overlap_count",
             "gap_count",
             "invalid_ohlc_count",
             "invalid_timestamp_count",
@@ -125,7 +127,7 @@ def validate_bar_sequence(
     symbol_mismatch_count: int = 0,
     assumptions: Sequence[str] = (),
 ) -> DataQualityReport:
-    """Validate order, duplicates, conflicts, and fixed-interval gaps.
+    """Validate order, duplicates, conflicts, overlaps, and interval gaps.
 
     Input order is inspected exactly as supplied. This function never sorts,
     deduplicates, repairs, fills, or resamples bars.
@@ -152,6 +154,7 @@ def validate_bar_sequence(
     duplicate_count = 0
     conflicting_duplicate_count = 0
     out_of_order_count = 0
+    overlap_count = 0
     gap_count = 0
     seen: dict[tuple[str, Timeframe, datetime], CanonicalBar] = {}
 
@@ -210,7 +213,24 @@ def validate_bar_sequence(
             and bar.timeframe is previous.timeframe
             and bar.timestamp > previous.timestamp
         )
-        if comparable and bar.timestamp > previous.timestamp + duration:
+        if comparable and bar.timestamp < previous.end_time:
+            overlap_count += 1
+            errors.append(
+                DataQualityIssue(
+                    code="interval_overlap",
+                    severity=IssueSeverity.ERROR,
+                    row_number=row_number,
+                    field="timestamp",
+                    raw_value=bar.timestamp.isoformat(),
+                    reason=(
+                        "current timestamp "
+                        f"{bar.timestamp.isoformat()} is earlier than "
+                        "previous.end_time "
+                        f"{previous.end_time.isoformat()}"
+                    ),
+                )
+            )
+        elif comparable and bar.timestamp > previous.end_time:
             gap_count += 1
             warnings.append(
                 DataQualityIssue(
@@ -245,6 +265,7 @@ def validate_bar_sequence(
         duplicate_count=duplicate_count,
         conflicting_duplicate_count=conflicting_duplicate_count,
         out_of_order_count=out_of_order_count,
+        overlap_count=overlap_count,
         gap_count=gap_count,
         invalid_ohlc_count=invalid_ohlc_count,
         invalid_timestamp_count=invalid_timestamp_count,

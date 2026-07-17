@@ -157,8 +157,8 @@ snapshot, and loaded/accepted/rejected row counts.
 
 Strict mode is the default. Invalid timestamps, timezone conflicts, symbol
 mismatches, invalid OHLC, invalid volume, unknown completion states,
-duplicates, conflicts, and out-of-order rows make the complete load fail with
-`DataLoadError`.
+duplicates, conflicts, out-of-order rows, and overlapping fixed intervals make
+the complete load fail with `DataLoadError`.
 
 The exception retains the complete `DataQualityReport`. Each error contains a
 row number, field, bounded raw-value representation, and reason. The loader
@@ -176,7 +176,7 @@ The immutable report records:
 
 - `total_rows`, `accepted_rows`, and `rejected_rows`;
 - `duplicate_count` and `conflicting_duplicate_count`;
-- `out_of_order_count` and `gap_count`;
+- `out_of_order_count`, `overlap_count`, and `gap_count`;
 - invalid OHLC, timestamp, and volume counts;
 - symbol mismatch count;
 - source and timeframe;
@@ -199,7 +199,19 @@ Future correction support must define a revision identifier, a `supersedes`
 relationship, the revision's own `available_time`, and full provenance. It
 must not overwrite old history in place.
 
-## 13. Gap Reporting
+## 13. Interval Overlap and Gap Reporting
+
+For adjacent, ascending bars with the same symbol and fixed timeframe,
+`previous.timestamp < current.timestamp < previous.end_time` is an
+`interval_overlap` error. Strict loading fails and records the current row,
+current timestamp, and `previous.end_time`. Equal timestamps remain duplicate
+or conflicting-duplicate errors and are not counted again as overlaps.
+
+The loader never repairs an overlap by moving a timestamp, clipping an
+interval, sorting rows, or deleting either bar. C-001C must later choose any
+alignment anchor used for resampling, but regardless of that future choice,
+adjacent canonical intervals within one source load for the same symbol and
+timeframe cannot overlap.
 
 For a fixed-duration timeframe, a later adjacent input timestamp beyond the
 next expected interval produces an `interval_gap` warning. The report includes
