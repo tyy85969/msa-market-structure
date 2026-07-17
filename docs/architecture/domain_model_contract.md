@@ -48,8 +48,8 @@ to UTC. The model never substitutes the system clock.
 
 ## 5. ConfirmTime
 
-`confirm_time` is the earliest instant at which the represented fact may be
-consumed downstream. An object is unavailable when
+`confirm_time` is the earliest instant at which the entire represented immutable
+snapshot may be consumed downstream. An object is unavailable when
 `processing_time < confirm_time` and first becomes available when
 `processing_time == confirm_time`.
 
@@ -58,6 +58,13 @@ Confirmed objects require `confirm_time >= origin_time`. A forming
 and cannot be converted to `BoundaryRef`. Cluster, state, and box constructors
 reject members or boundaries that would require information later than their
 own ConfirmTime.
+
+Every touch, break, freeze, or retire fact already expressed by a snapshot must
+have occurred and become knowable no later than that snapshot's ConfirmTime.
+A later event therefore requires the caller to create a new immutable snapshot
+with a new causal ConfirmTime that is no earlier than the event's confirmation.
+Changing historical drawing back to OriginTime does not move ConfirmTime or
+make the snapshot available earlier.
 
 ## 6. AsOfTime
 
@@ -115,10 +122,13 @@ For `CONFIRMED`, ConfirmTime is required, cannot precede OriginTime, and
 lifecycle cannot remain `CANDIDATE`.
 
 `touch_count` is non-negative. Zero touches require both last-touch fields to
-be absent; a positive count requires both. A last-touch ConfirmTime cannot
-precede its event time. Break time fields are likewise both absent or both
-present, and break confirmation cannot precede break origin. Supplying touch or
-break facts does not trigger a lifecycle transition.
+be absent; a positive count requires both. A stored touch must satisfy
+`origin_time <= last_touch_time <= last_touch_confirm_time <= confirm_time`.
+Break time fields are likewise both absent or both present, and a stored break
+must satisfy
+`origin_time <= break_time <= break_confirm_time <= confirm_time`. Because a
+forming candidate has no ConfirmTime, it cannot contain these confirmed event
+facts. Supplying touch or break facts does not trigger a lifecycle transition.
 
 `is_confirmed_at`, `require_confirmed_at`, and `to_boundary_ref` enforce causal
 consumption without detecting or changing the candidate.
@@ -177,12 +187,16 @@ times, and provenance. Both boundary symbols must match the box; lower and
 upper sides are enforced; both must already be confirmed by box ConfirmTime.
 
 The finite Decimal `selection_price` must lie inclusively between the inner
-edges `lower.price_range.high` and `upper.price_range.low`. Any supplied frozen
-or retired time cannot precede box ConfirmTime. `RETIRED` requires an explicit
-retired time, while other statuses reject one.
+edges `lower.price_range.high` and `upper.price_range.low`. Any supplied
+`frozen_time` or `retired_time` must be no later than box ConfirmTime. `FROZEN`
+requires an explicit frozen time. `RETIRED` requires an explicit retired time,
+while other statuses reject a retired time. When both event times are present,
+`frozen_time <= retired_time`.
 
-C-002 does not create, replace, freeze, invalidate, or retire a box. It only
-validates a caller-supplied snapshot.
+C-002 does not create versions, replace, freeze, invalidate, or retire a box,
+and it implements no lifecycle transition algorithm. It only validates a
+caller-supplied immutable snapshot. A later lifecycle fact requires the caller
+to construct a new snapshot with an appropriately later causal ConfirmTime.
 
 ## 16. Lifecycle Enum
 
@@ -223,6 +237,8 @@ or any reconstructed invariant violation. Pickle is not a public format.
 - ConfirmTime is the first consumable instant, including equality.
 - AsOfTime records computation but cannot move ConfirmTime earlier.
 - A forming Candidate cannot become a confirmed reference.
+- Stored touch, break, freeze, and retire facts cannot follow their containing
+  snapshot's ConfirmTime.
 - A Cluster cannot precede its latest member.
 - A State or Active Box cannot reference a future boundary.
 - Boundary snapshots are immutable and are not rewritten by future object
@@ -259,8 +275,6 @@ C-002 does not start C-003 or C-004.
   configurations define?
 - Which versioning policy will govern future `state_version` values and schema
   migrations beyond `schema_version=1`?
-- Will C-006 require `frozen_time` whenever status is `FROZEN`, or retain the
-  current C-002 rule that only validates it when supplied?
 - Will later correction handling create new versioned snapshots, event records,
   or both? Existing immutable snapshots must never be silently rewritten.
 - Which provenance policy IDs will C-003 through C-007 approve for their first

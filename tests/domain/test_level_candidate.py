@@ -167,14 +167,44 @@ def test_touch_confirm_time_cannot_precede_touch_origin() -> None:
         )
 
 
+def test_touch_time_cannot_precede_candidate_origin() -> None:
+    with pytest.raises(DomainValidationError, match="last_touch_time"):
+        candidate(
+            touch_count=1,
+            last_touch_time=ORIGIN - timedelta(seconds=1),
+            last_touch_confirm_time=ORIGIN,
+        )
+
+
+def test_touch_confirm_time_cannot_follow_candidate_confirm_time() -> None:
+    with pytest.raises(DomainValidationError, match="last_touch_confirm_time"):
+        candidate(
+            touch_count=1,
+            last_touch_time=CONFIRM,
+            last_touch_confirm_time=CONFIRM + timedelta(microseconds=1),
+        )
+
+
 def test_valid_touch_facts_are_preserved() -> None:
     result = candidate(
         touch_count=2,
         last_touch_time=CONFIRM,
-        last_touch_confirm_time=CONFIRM + timedelta(minutes=15),
+        last_touch_confirm_time=CONFIRM,
     )
     assert result.touch_count == 2
-    assert result.last_touch_confirm_time == CONFIRM + timedelta(minutes=15)
+    assert result.last_touch_confirm_time == CONFIRM
+
+
+def test_later_touch_fact_requires_later_candidate_confirm_time() -> None:
+    later_confirm = CONFIRM + timedelta(minutes=15)
+    result = candidate(
+        confirm_time=later_confirm,
+        touch_count=1,
+        last_touch_time=CONFIRM + timedelta(minutes=10),
+        last_touch_confirm_time=later_confirm,
+    )
+    assert result.confirm_time == later_confirm
+    assert result.last_touch_confirm_time == later_confirm
 
 
 @pytest.mark.parametrize(
@@ -199,13 +229,40 @@ def test_break_confirm_time_cannot_precede_break_origin() -> None:
         )
 
 
+def test_break_time_cannot_precede_candidate_origin() -> None:
+    with pytest.raises(DomainValidationError, match="break_time"):
+        candidate(
+            break_time=ORIGIN - timedelta(seconds=1),
+            break_confirm_time=ORIGIN,
+        )
+
+
+def test_break_confirm_time_cannot_follow_candidate_confirm_time() -> None:
+    with pytest.raises(DomainValidationError, match="break_confirm_time"):
+        candidate(
+            break_time=CONFIRM,
+            break_confirm_time=CONFIRM + timedelta(microseconds=1),
+        )
+
+
 def test_break_facts_do_not_automatically_change_lifecycle() -> None:
     result = candidate(
         lifecycle_state=LifecycleState.FRESH,
         break_time=CONFIRM,
-        break_confirm_time=CONFIRM + timedelta(minutes=1),
+        break_confirm_time=CONFIRM,
     )
     assert result.lifecycle_state is LifecycleState.FRESH
+
+
+def test_later_break_fact_requires_later_candidate_confirm_time() -> None:
+    later_confirm = CONFIRM + timedelta(minutes=15)
+    result = candidate(
+        confirm_time=later_confirm,
+        break_time=CONFIRM + timedelta(minutes=10),
+        break_confirm_time=later_confirm,
+    )
+    assert result.confirm_time == later_confirm
+    assert result.break_confirm_time == later_confirm
 
 
 def test_confirmed_candidate_converts_to_complete_boundary_snapshot() -> None:

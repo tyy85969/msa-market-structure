@@ -148,21 +148,51 @@ def test_non_retired_box_rejects_retired_time() -> None:
 def test_retired_box_accepts_explicit_retired_time() -> None:
     result = active_box(
         status=ActiveBoxStatus.RETIRED,
-        retired_time=CONFIRM + timedelta(hours=1),
+        retired_time=CONFIRM,
     )
-    assert result.retired_time == CONFIRM + timedelta(hours=1)
+    assert result.retired_time == CONFIRM
 
 
-def test_active_box_rejects_frozen_time_before_confirm() -> None:
+def test_frozen_box_requires_frozen_time() -> None:
+    with pytest.raises(DomainValidationError, match="frozen_time is required"):
+        active_box(status=ActiveBoxStatus.FROZEN)
+
+
+def test_active_box_rejects_frozen_time_after_confirm() -> None:
     with pytest.raises(DomainValidationError, match="frozen_time"):
-        active_box(frozen_time=CONFIRM - timedelta(seconds=1))
+        active_box(frozen_time=CONFIRM + timedelta(microseconds=1))
 
 
-def test_active_box_rejects_retired_time_before_confirm() -> None:
+def test_frozen_time_may_equal_confirm_time() -> None:
+    result = active_box(
+        status=ActiveBoxStatus.FROZEN,
+        frozen_time=CONFIRM,
+    )
+    assert result.frozen_time == CONFIRM
+
+
+def test_active_box_rejects_retired_time_after_confirm() -> None:
     with pytest.raises(DomainValidationError, match="retired_time"):
         active_box(
             status=ActiveBoxStatus.RETIRED,
-            retired_time=CONFIRM - timedelta(seconds=1),
+            retired_time=CONFIRM + timedelta(microseconds=1),
+        )
+
+
+def test_retired_time_may_equal_confirm_time() -> None:
+    result = active_box(
+        status=ActiveBoxStatus.RETIRED,
+        retired_time=CONFIRM,
+    )
+    assert result.retired_time == CONFIRM
+
+
+def test_active_box_rejects_frozen_time_after_retired_time() -> None:
+    with pytest.raises(DomainValidationError, match="frozen_time"):
+        active_box(
+            status=ActiveBoxStatus.RETIRED,
+            frozen_time=CONFIRM,
+            retired_time=CONFIRM - timedelta(microseconds=1),
         )
 
 
@@ -172,9 +202,14 @@ def test_active_box_rejects_as_of_before_confirm() -> None:
 
 
 def test_active_box_availability_starts_at_confirm_time() -> None:
-    result = active_box()
+    result = active_box(
+        status=ActiveBoxStatus.RETIRED,
+        frozen_time=CONFIRM - timedelta(minutes=1),
+        retired_time=CONFIRM,
+    )
     assert not result.is_available_at(CONFIRM - timedelta(microseconds=1))
     with pytest.raises(DomainAvailabilityError):
         result.require_available_at(CONFIRM - timedelta(microseconds=1))
     assert result.is_available_at(CONFIRM)
     assert result.require_available_at(CONFIRM) is result
+    assert result.frozen_time <= result.retired_time <= result.confirm_time

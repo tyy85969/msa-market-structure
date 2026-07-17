@@ -97,6 +97,40 @@ def test_candidate_first_becomes_consumable_exactly_at_confirm_time() -> None:
     assert result.require_confirmed_at(result.confirm_time) is result
 
 
+def test_candidate_rejects_touch_fact_confirmed_after_snapshot() -> None:
+    result = candidate("candidate-1", 2)
+    with pytest.raises(DomainValidationError, match="last_touch_confirm_time"):
+        replace(
+            result,
+            touch_count=1,
+            last_touch_time=result.confirm_time,
+            last_touch_confirm_time=result.confirm_time + timedelta(microseconds=1),
+        )
+
+
+def test_candidate_rejects_break_fact_confirmed_after_snapshot() -> None:
+    result = candidate("candidate-1", 2)
+    with pytest.raises(DomainValidationError, match="break_confirm_time"):
+        replace(
+            result,
+            break_time=result.confirm_time,
+            break_confirm_time=result.confirm_time + timedelta(microseconds=1),
+        )
+
+
+def test_candidate_with_stored_event_is_unavailable_before_snapshot_confirm() -> None:
+    result = replace(
+        candidate("candidate-1", 2),
+        touch_count=1,
+        last_touch_time=BASE + timedelta(hours=1),
+        last_touch_confirm_time=BASE + timedelta(hours=1, minutes=30),
+    )
+    processing_time = result.confirm_time - timedelta(microseconds=1)
+    assert not result.is_confirmed_at(processing_time)
+    with pytest.raises(DomainAvailabilityError):
+        result.require_confirmed_at(processing_time)
+
+
 def test_cluster_cannot_confirm_before_latest_member() -> None:
     early = candidate("early", 1).to_boundary_ref()
     late = candidate("late", 3).to_boundary_ref()
@@ -157,6 +191,75 @@ def test_active_box_cannot_reference_future_boundary() -> None:
             None,
             provenance("box-1"),
         )
+
+
+def test_active_box_rejects_freeze_fact_after_snapshot_confirm() -> None:
+    lower = boundary(BoundarySide.LOWER, 2)
+    upper = boundary(BoundarySide.UPPER, 2)
+    with pytest.raises(DomainValidationError, match="frozen_time"):
+        ActiveBox(
+            "box-1",
+            "XAUUSD",
+            Timeframe.H1,
+            SCALE,
+            lower,
+            upper,
+            Decimal("2350"),
+            ActiveBoxStatus.FROZEN,
+            BASE,
+            BASE + timedelta(hours=3),
+            BASE + timedelta(hours=3),
+            BASE + timedelta(hours=4),
+            None,
+            provenance("box-1"),
+        )
+
+
+def test_active_box_rejects_retire_fact_after_snapshot_confirm() -> None:
+    lower = boundary(BoundarySide.LOWER, 2)
+    upper = boundary(BoundarySide.UPPER, 2)
+    with pytest.raises(DomainValidationError, match="retired_time"):
+        ActiveBox(
+            "box-1",
+            "XAUUSD",
+            Timeframe.H1,
+            SCALE,
+            lower,
+            upper,
+            Decimal("2350"),
+            ActiveBoxStatus.RETIRED,
+            BASE,
+            BASE + timedelta(hours=3),
+            BASE + timedelta(hours=3),
+            None,
+            BASE + timedelta(hours=4),
+            provenance("box-1"),
+        )
+
+
+def test_active_box_state_facts_first_become_available_at_snapshot_confirm() -> None:
+    lower = boundary(BoundarySide.LOWER, 2)
+    upper = boundary(BoundarySide.UPPER, 2)
+    confirm_time = BASE + timedelta(hours=3)
+    result = ActiveBox(
+        "box-1",
+        "XAUUSD",
+        Timeframe.H1,
+        SCALE,
+        lower,
+        upper,
+        Decimal("2350"),
+        ActiveBoxStatus.RETIRED,
+        BASE,
+        confirm_time,
+        confirm_time,
+        BASE + timedelta(hours=2, minutes=30),
+        confirm_time,
+        provenance("box-1"),
+    )
+    assert not result.is_available_at(confirm_time - timedelta(microseconds=1))
+    assert result.is_available_at(confirm_time)
+    assert result.frozen_time <= result.retired_time <= result.confirm_time
 
 
 def test_backplot_origin_change_does_not_change_confirm_time() -> None:

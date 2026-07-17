@@ -359,6 +359,18 @@ class LevelCandidate:
                 "LevelCandidate.last_touch_confirm_time must be >= "
                 "LevelCandidate.last_touch_time"
             )
+        if last_touch is not None and last_touch < origin:
+            raise DomainValidationError(
+                "LevelCandidate.last_touch_time must be >= "
+                "LevelCandidate.origin_time"
+            )
+        if last_touch_confirm is not None and (
+            confirm is None or last_touch_confirm > confirm
+        ):
+            raise DomainValidationError(
+                "LevelCandidate.last_touch_confirm_time must be <= "
+                "LevelCandidate.confirm_time"
+            )
 
         break_time = _normalize_optional_utc_datetime(
             object_name, "break_time", self.break_time
@@ -379,6 +391,17 @@ class LevelCandidate:
             raise DomainValidationError(
                 "LevelCandidate.break_confirm_time must be >= "
                 "LevelCandidate.break_time"
+            )
+        if break_time is not None and break_time < origin:
+            raise DomainValidationError(
+                "LevelCandidate.break_time must be >= LevelCandidate.origin_time"
+            )
+        if break_confirm is not None and (
+            confirm is None or break_confirm > confirm
+        ):
+            raise DomainValidationError(
+                "LevelCandidate.break_confirm_time must be <= "
+                "LevelCandidate.confirm_time"
             )
         _require_non_empty_text(
             object_name, "structure_family", self.structure_family
@@ -1003,13 +1026,9 @@ class ActiveBox:
         retired = _normalize_optional_utc_datetime(
             object_name, "retired_time", self.retired_time
         )
-        if frozen is not None and frozen < confirm:
+        if self.status is ActiveBoxStatus.FROZEN and frozen is None:
             raise DomainValidationError(
-                "ActiveBox.frozen_time must be >= ActiveBox.confirm_time"
-            )
-        if retired is not None and retired < confirm:
-            raise DomainValidationError(
-                "ActiveBox.retired_time must be >= ActiveBox.confirm_time"
+                "ActiveBox.frozen_time is required when status is FROZEN"
             )
         if self.status is ActiveBoxStatus.RETIRED and retired is None:
             raise DomainValidationError(
@@ -1018,6 +1037,18 @@ class ActiveBox:
         if self.status is not ActiveBoxStatus.RETIRED and retired is not None:
             raise DomainValidationError(
                 "ActiveBox.retired_time must be None unless status is RETIRED"
+            )
+        if frozen is not None and frozen > confirm:
+            raise DomainValidationError(
+                "ActiveBox.frozen_time must be <= ActiveBox.confirm_time"
+            )
+        if retired is not None and retired > confirm:
+            raise DomainValidationError(
+                "ActiveBox.retired_time must be <= ActiveBox.confirm_time"
+            )
+        if frozen is not None and retired is not None and frozen > retired:
+            raise DomainValidationError(
+                "ActiveBox.frozen_time must be <= ActiveBox.retired_time"
             )
         _require_instance(
             object_name, "provenance", self.provenance, ProvenanceRef
