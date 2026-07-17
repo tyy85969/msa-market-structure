@@ -10,6 +10,7 @@ from msa.data import (
     CanonicalBar,
     CompletedBarPolicy,
     DataLoadError,
+    IncompleteBarError,
     SourceConfigurationError,
     SourceDataConfig,
     Timeframe,
@@ -63,6 +64,21 @@ def close_time_config(**overrides: object) -> SourceDataConfig:
     }
     values.update(overrides)
     return replace(open_time_config(), **values)
+
+
+def explicit_completion_config(**overrides: object) -> SourceDataConfig:
+    values: dict[str, object] = {
+        "volume_type": VolumeType.UNAVAILABLE,
+        "volume_column": None,
+        "completed_bar_policy": CompletedBarPolicy.EXPLICIT_COLUMN,
+        "complete_column": "complete",
+        "observed_time_column": "observed_time",
+        "complete_true_values": ("closed",),
+        "complete_false_values": ("forming",),
+        "availability_lag": timedelta(0),
+    }
+    values.update(overrides)
+    return open_time_config(**values)
 
 
 def valid_record(**overrides: object) -> dict[str, object]:
@@ -185,32 +201,121 @@ def test_availability_lag_is_applied_after_end_time() -> None:
     assert bar.available_time >= bar.end_time
 
 
+def test_explicit_completion_requires_observed_time_column() -> None:
+    with pytest.raises(SourceConfigurationError, match="observed_time_column"):
+        open_time_config(
+            completed_bar_policy=CompletedBarPolicy.EXPLICIT_COLUMN,
+            complete_column="complete",
+            complete_true_values=("closed",),
+            complete_false_values=("forming",),
+        )
+
+
 def test_explicit_completion_column_is_strictly_mapped() -> None:
-    config = open_time_config(
-        volume_type=VolumeType.UNAVAILABLE,
-        volume_column=None,
-        completed_bar_policy=CompletedBarPolicy.EXPLICIT_COLUMN,
-        complete_column="complete",
-        complete_true_values=("closed",),
-        complete_false_values=("forming",),
-        availability_lag=timedelta(0),
-    )
+    config = explicit_completion_config()
 
     result = load_csv(FIXTURES / "explicit_completion.csv", config)
 
     assert result.bars[0].is_complete
+    assert result.bars[0].available_time == datetime(
+        2026, 1, 2, 13, 15, tzinfo=UTC
+    )
     assert not result.bars[1].is_complete
+    assert result.bars[1].available_time == datetime(
+        2026, 1, 2, 13, 20, tzinfo=UTC
+    )
+    assert result.bars[1].available_time < result.bars[1].end_time
     assert not result.bars[1].is_confirmed_at(result.bars[1].available_time)
+    with pytest.raises(IncompleteBarError, match="incomplete"):
+        result.bars[1].require_confirmed(
+            result.bars[1].available_time + timedelta(days=1)
+        )
+
+
+def test_completed_explicit_row_rejects_observation_before_end_time() -> None:
+    record = valid_record(
+        complete="closed",
+        observed_time="2026-01-02 03:14:59",
+    )
+
+    with pytest.raises(DataLoadError, match="observed time.*end_time"):
+        load_records([record], explicit_completion_config())
+
+
+def test_explicit_observed_time_uses_timezone_and_availability_lag() -> None:
+    record = valid_record(
+        complete="forming",
+        observed_time="2026-01-02 03:05:00",
+    )
+
+    bar = load_records(
+        [record],
+        explicit_completion_config(availability_lag=timedelta(seconds=7)),
+    ).bars[0]
+
+    assert bar.available_time == datetime(2026, 1, 2, 8, 5, 7, tzinfo=UTC)
+    assert bar.available_time < bar.end_time
+
+
+@pytest.mark.parametrize(
+    ("bar_time", "observed_time", "reason"),
+    [
+        (
+            "2026-11-01 00:30:00",
+            "2026-11-01 01:30:00",
+            "ambiguous",
+        ),
+        (
+            "2026-03-08 01:30:00",
+            "2026-03-08 02:30:00",
+            "does not exist",
+        ),
+    ],
+)
+def test_explicit_observed_time_rejects_dst_anomalies(
+    bar_time: str, observed_time: str, reason: str
+) -> None:
+    record = valid_record(
+        time=bar_time,
+        complete="forming",
+        observed_time=observed_time,
+    )
+
+    with pytest.raises(DataLoadError, match=reason):
+        load_records([record], explicit_completion_config())
+
+
+def test_incomplete_availability_does_not_use_next_row_time() -> None:
+    result = load_records(
+        [
+            valid_record(
+                complete="forming",
+                observed_time="2026-01-02 03:05:00",
+            ),
+            valid_record(
+                time="2026-01-02 03:15:00",
+                open="2001.0",
+                high="2003.0",
+                low="2000.0",
+                close="2002.0",
+                complete="forming",
+                observed_time="2026-01-02 03:18:00",
+            ),
+        ],
+        explicit_completion_config(),
+    )
+
+    assert result.bars[0].available_time == datetime(
+        2026, 1, 2, 8, 5, tzinfo=UTC
+    )
+    assert result.bars[0].available_time != result.bars[1].timestamp
 
 
 def test_unknown_completion_value_is_not_coerced_to_true() -> None:
-    config = open_time_config(
-        completed_bar_policy=CompletedBarPolicy.EXPLICIT_COLUMN,
-        complete_column="complete",
-        complete_true_values=("closed",),
-        complete_false_values=("forming",),
+    config = explicit_completion_config()
+    record = valid_record(
+        complete="yes", observed_time="2026-01-02 03:05:00"
     )
-    record = valid_record(complete="yes")
 
     with pytest.raises(DataLoadError, match="unknown completion state"):
         load_records([record], config)

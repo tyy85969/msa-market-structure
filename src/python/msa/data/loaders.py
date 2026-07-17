@@ -242,6 +242,14 @@ def _parse_row(
 
     timestamp, end_time = _parse_interval(record, row_number, config)
     is_complete = _parse_completion(record, row_number, config)
+    available_time = _parse_available_time(
+        record,
+        row_number,
+        config,
+        timestamp=timestamp,
+        end_time=end_time,
+        is_complete=is_complete,
+    )
 
     prices: dict[str, Decimal] = {}
     for canonical_name, source_column in (
@@ -292,7 +300,7 @@ def _parse_row(
             session_id=config.session_id,
             boundary_policy=config.boundary_policy,
             is_complete=is_complete,
-            available_time=end_time + config.availability_lag,
+            available_time=available_time,
         )
     except ContractValidationError as exc:
         message = str(exc)
@@ -470,6 +478,43 @@ def _parse_completion(
         "unknown completion state; no implicit truth-value coercion is allowed",
         None,
     )
+
+
+def _parse_available_time(
+    record: Mapping[str, object],
+    row_number: int,
+    config: SourceDataConfig,
+    *,
+    timestamp: datetime,
+    end_time: datetime,
+    is_complete: bool,
+) -> datetime:
+    if config.completed_bar_policy is CompletedBarPolicy.ALL_ROWS_ARE_CLOSED:
+        return end_time + config.availability_lag
+
+    assert config.observed_time_column is not None
+    observed_time = _parse_timestamp_column(
+        record, config.observed_time_column, row_number, config
+    )
+    if is_complete and observed_time < end_time:
+        _raise_row_error(
+            row_number,
+            config.observed_time_column,
+            record.get(config.observed_time_column),
+            "a completed row's observed time must not be earlier than end_time",
+            "invalid_timestamp",
+        )
+
+    available_time = observed_time + config.availability_lag
+    if available_time < timestamp:
+        _raise_row_error(
+            row_number,
+            config.observed_time_column,
+            record.get(config.observed_time_column),
+            "available_time must not be earlier than timestamp",
+            "invalid_timestamp",
+        )
+    return available_time
 
 
 def _parse_decimal(

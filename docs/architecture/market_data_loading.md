@@ -34,6 +34,7 @@ and quality layer. C-001B does not start C-001C or aggregate any timeframe.
 - `volume_column` or `None`, plus `volume_type`;
 - `completed_bar_policy` and, when needed, the complete-state column and its
   exact true/false value mappings;
+- explicit `observed_time_column` for `EXPLICIT_COLUMN` snapshot versions;
 - explicit `availability_lag`;
 - optional `session_id` and `boundary_policy`;
 - optional explicit `open_time_column` or `end_time_column` for interval
@@ -83,6 +84,7 @@ timestamp is localized only through that configured timezone. A timestamp
 that contains an offset must agree with the configured timezone at that local
 wall time.
 
+This localization rule also applies to an explicit snapshot observed time.
 Ambiguous DST wall times without an offset and nonexistent DST wall times fail
 with row, field, raw value, and reason. The loader never chooses a DST fold or
 repairs a nonexistent time silently. All emitted `timestamp`, `end_time`, and
@@ -92,13 +94,14 @@ repairs a nonexistent time silently. All emitted `timestamp`, `end_time`, and
 
 `ALL_ROWS_ARE_CLOSED` is an explicit assertion that every source row is a
 completed historical bar. It sets `is_complete=True` and records the assertion
-in the report.
+in the report. `observed_time_column` may be omitted and does not replace the
+closed-bar `end_time` availability basis.
 
-`EXPLICIT_COLUMN` requires a configured state column and disjoint, non-empty
-true/false value sets. Parsing is exact. Unknown strings, booleans, and generic
-truthy values are not coerced. An explicitly incomplete row remains an
-incomplete `CanonicalBar`; it never enters a confirmed stream merely because
-an availability time exists.
+`EXPLICIT_COLUMN` requires a configured state column, disjoint and non-empty
+true/false value sets, and an explicit `observed_time_column` on every row.
+Parsing is exact. Unknown strings, booleans, and generic truthy values are not
+coerced. An explicitly incomplete row remains an incomplete `CanonicalBar`;
+it never enters a confirmed stream merely because an availability time exists.
 
 C-001B does not implement streaming and does not manufacture historical
 forming snapshots from a final closed-bar CSV.
@@ -106,15 +109,28 @@ forming snapshots from a final closed-bar CSV.
 ## 8. Availability Lag
 
 Every configuration supplies a non-negative `timedelta`. Zero is valid only
-when explicitly configured. The loader applies:
+when explicitly configured. `ALL_ROWS_ARE_CLOSED` applies:
 
 ```text
 available_time = end_time + availability_lag
 ```
 
-A completed bar is therefore never available before its interval ends.
-`available_time` remains part of every returned and serialized
-`CanonicalBar`, so a batch result can be replayed chronologically.
+`EXPLICIT_COLUMN` applies independently for every concrete row version:
+
+```text
+available_time = explicit observed_time + availability_lag
+```
+
+A completed explicit row cannot claim an observed time before `end_time`, and
+its final `available_time` must remain at or after `end_time`. An incomplete
+snapshot must have an explicit observation time. Its `available_time` may be
+before `end_time` but cannot precede the bar `timestamp`, and it can never enter
+a confirmed stream.
+
+The loader does not infer an incomplete snapshot's observation time from its
+future `end_time`, a following row, or a file-level timestamp. `available_time`
+remains part of every returned and serialized `CanonicalBar`, so chronological
+replay uses the real availability of each concrete data version.
 
 ## 9. CSV and Record Loading Flow
 
@@ -200,7 +216,7 @@ bound.
 Every bar retains the configured source, source timezone, session identifier,
 and boundary policy. The immutable configuration snapshot and quality-report
 assumptions retain the symbol mapping, timestamp semantics, completion policy,
-and availability lag used for the load.
+available-time basis, and availability lag used for the load.
 
 Source corrections are reported as duplicates or conflicts; they do not
 rewrite earlier bars.
@@ -209,6 +225,11 @@ rewrite earlier bars.
 
 - The loader preserves `available_time` separately from bar opening time.
 - A completed row cannot become available before `end_time`.
+- Each explicit incomplete snapshot requires its own observed time.
+- Incomplete availability is never inferred from `end_time`, a later row, or
+  the final timestamp in a file.
+- A forming snapshot's OHLC is preserved as that version; later final OHLC is
+  not backfilled into it.
 - A final historical CSV is not expanded into imaginary incomplete snapshots.
 - Completion never depends on a later row or the final timestamp in a file.
 - Input order is audited as supplied; the loader never silently sorts it.

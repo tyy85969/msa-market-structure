@@ -105,6 +105,7 @@ class SourceDataConfig:
     symbol_column: str | None = None
     open_time_column: str | None = None
     complete_column: str | None = None
+    observed_time_column: str | None = None
     complete_true_values: tuple[str, ...] = ()
     complete_false_values: tuple[str, ...] = ()
     delimiter: str = ","
@@ -133,6 +134,7 @@ class SourceDataConfig:
             "symbol_column",
             "open_time_column",
             "complete_column",
+            "observed_time_column",
         ):
             value = getattr(self, field_name)
             if value is not None:
@@ -200,6 +202,10 @@ class SourceDataConfig:
             raise SourceConfigurationError(
                 "EXPLICIT_COLUMN requires an explicit complete_column"
             )
+        if self.observed_time_column is None:
+            raise SourceConfigurationError(
+                "EXPLICIT_COLUMN requires an explicit observed_time_column"
+            )
         if not self.complete_true_values or not self.complete_false_values:
             raise SourceConfigurationError(
                 "EXPLICIT_COLUMN requires explicit true and false value mappings"
@@ -259,6 +265,7 @@ class SourceDataConfig:
             self.open_time_column,
             self.end_time_column,
             self.complete_column,
+            self.observed_time_column,
         ):
             if column is not None:
                 columns.append(column)
@@ -272,11 +279,18 @@ class SourceDataConfig:
     def assumptions(self) -> tuple[str, ...]:
         """Return auditable assumptions recorded in each quality report."""
 
+        availability_basis = (
+            "bar end_time"
+            if self.completed_bar_policy
+            is CompletedBarPolicy.ALL_ROWS_ARE_CLOSED
+            else f"explicit observed time column {self.observed_time_column}"
+        )
         return (
             f"explicit symbol mapping {self.source_symbol} -> "
             f"{self.canonical_symbol}",
             f"source timestamp semantics: {self.timestamp_semantics.value}",
             f"source timezone: {self.source_timezone}",
             f"completed-bar policy: {self.completed_bar_policy.value}",
+            f"available-time basis: {availability_basis}",
             f"availability lag: {self.availability_lag.total_seconds()} seconds",
         )
