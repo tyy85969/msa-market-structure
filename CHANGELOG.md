@@ -16,6 +16,10 @@
 - Defined the canonical market-data contract and immutable `CanonicalBar`.
 - Added stable `Timeframe`, volume-type, and available-time semantics.
 - Added deterministic contract validation and serialization tests.
+- Added source-configured UTF-8 CSV and iterable-record loading.
+- Added explicit symbol mapping, timestamp semantics, and timezone conversion.
+- Added strict duplicate, order, OHLCV, and fixed-interval gap validation.
+- Added immutable, traceable market-data quality reporting.
 
 ### Added
 - 初始化 MSA 项目仓库。
