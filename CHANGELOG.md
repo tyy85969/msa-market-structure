@@ -25,6 +25,7 @@
 - Added contiguous and explicit-slot coverage validation.
 - Added causal HTF available-time semantics.
 - Added batch and chronological replay equivalence tests.
+- Added an independent C-001D market-data and no-lookahead audit with deterministic replay and metamorphic coverage.
 
 ### Added
 - 初始化 MSA 项目仓库。
