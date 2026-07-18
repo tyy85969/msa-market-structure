@@ -120,6 +120,11 @@ class PivotDetectorConfig:
             )
         if not isinstance(self.strict, bool):
             raise SwingConfigurationError("strict must be a bool")
+        if self.strict is not True:
+            raise SwingConfigurationError(
+                "PivotDetectorConfig.strict must be True; "
+                "C-003A supports strict mode only"
+            )
 
     def to_dict(self) -> dict[str, object]:
         return {

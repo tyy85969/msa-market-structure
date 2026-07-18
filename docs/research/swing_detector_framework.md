@@ -51,6 +51,14 @@ The configuration is frozen, contains no clock or random default, rejects
 unknown fields and schema versions, and round-trips through `to_dict` and
 `from_dict`.
 
+C-003A supports only `strict=True`. This field declares the strict fail-closed
+experiment input mode: invalid configuration, source quality, identity,
+sequence, completeness, or causal availability fails instead of producing a
+report-only result. `strict=False` is unsupported and fails during config
+construction or deserialization. A future non-strict or report-only mode must
+define separately approved behavior and use an explicit schema/version change;
+it cannot silently reuse the current schema.
+
 ## 6. Strict Tie Policy
 
 C-003A implements only `STRICT`:
@@ -64,6 +72,11 @@ Equal highs or equal lows invalidate that side. The implementation does not
 pick the first, last, or visually preferred equal extreme. One wide center bar
 may independently satisfy both rules and then emits distinct UPPER and LOWER
 candidates.
+
+`TiePolicy.STRICT` and `PivotDetectorConfig.strict` are different concepts.
+The tie policy defines strict high/low comparison inequalities. The config
+field declares strict fail-closed input/error handling and, in C-003A, must be
+exactly `True`.
 
 ## 7. Input Sequence Semantics
 
@@ -134,7 +147,7 @@ Candidate IDs use SHA-256 over canonical UTF-8 JSON. The identity includes:
 - causal ConfirmTime and source;
 - exact Decimal price string;
 - left/right counts and tie policy;
-- explicit scale and strict setting.
+- explicit scale and the `strict=true` mode marker.
 - ordered window bar keys, compared high/low values, and member availability.
 
 The public form is `swing-pivot-v1-<sha256>`. There is no `uuid4`, clock,

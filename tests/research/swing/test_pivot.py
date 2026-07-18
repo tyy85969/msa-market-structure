@@ -254,7 +254,6 @@ def test_changing_window_availability_changes_candidate_id_and_confirm_time() ->
         {"right_bars": 2},
         {"policy_id": "pivot-strict-v2"},
         {"detector_version": "1.0.1"},
-        {"strict": False},
     ],
 )
 def test_changing_configuration_changes_candidate_id(
@@ -391,8 +390,34 @@ def test_production_source_has_no_deferred_detectors_or_signal_code() -> None:
 
 def test_valid_config_round_trip() -> None:
     config = pivot_config(left_bars=2, right_bars=3)
+    assert config.strict is True
+    assert config.to_dict()["strict"] is True
     assert PivotDetectorConfig.from_dict(config.to_dict()) == config
     assert config.to_dict()["schema_version"] == 1
+
+
+def test_strict_false_is_rejected() -> None:
+    with pytest.raises(
+        SwingConfigurationError,
+        match="PivotDetectorConfig.strict must be True",
+    ):
+        pivot_config(strict=False)
+
+
+def test_serialized_strict_false_is_rejected() -> None:
+    payload = pivot_config().to_dict()
+    payload["strict"] = False
+    with pytest.raises(
+        SwingConfigurationError,
+        match="C-003A supports strict mode only",
+    ):
+        PivotDetectorConfig.from_dict(payload)
+
+
+@pytest.mark.parametrize("value", [0, 1, "true", None])
+def test_non_bool_strict_is_rejected(value: object) -> None:
+    with pytest.raises(SwingConfigurationError, match="strict must be a bool"):
+        pivot_config(strict=value)  # type: ignore[arg-type]
 
 
 @pytest.mark.parametrize("field_name", ["left_bars", "right_bars"])
