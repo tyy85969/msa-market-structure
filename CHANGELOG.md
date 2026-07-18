@@ -32,6 +32,8 @@
 - Added explicit OriginTime, ConfirmTime, and AsOfTime semantics.
 - Added deterministic, versioned domain serialization.
 - Added causal availability and no-lookahead domain tests.
+- Added the research-only Swing detector protocol and causal confirmed Pivot baseline.
+- Added deterministic Pivot identity/provenance plus Batch, As-Of, and replay tests.
 
 ### Added
 - 初始化 MSA 项目仓库。
