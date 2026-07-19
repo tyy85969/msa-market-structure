@@ -34,6 +34,8 @@
 - Added causal availability and no-lookahead domain tests.
 - Added the research-only Swing detector protocol and causal confirmed Pivot baseline.
 - Added deterministic Pivot identity/provenance plus Batch, As-Of, and replay tests.
+- Added research-only periodic-extreme and historical-reaction level generators.
+- Added deterministic C-004 identity/provenance, causal-prefix, As-Of, and replay tests.
 
 ### Added
 - 初始化 MSA 项目仓库。
