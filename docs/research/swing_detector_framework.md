@@ -2,10 +2,12 @@
 
 ## 1. Purpose
 
-C-003A defines a research-only, pluggable Swing detector protocol and one
-confirmed Fractal/Pivot baseline. The baseline exists to make causal timing,
-configuration, provenance, batch, As-Of, and replay behavior testable. It is
-not the final selected Swing algorithm and it makes no trading claim.
+C-003A/B define a research-only, pluggable Swing detector protocol and four
+causal baselines: confirmed Fractal/Pivot, ATR turning-point, Pivot plus
+structure confirmation, and ATR turning-point plus structure confirmation.
+The baselines make causal timing, configuration, provenance, batch, As-Of,
+and replay behavior testable. They do not select a final Swing algorithm and
+make no trading claim.
 
 ## 2. Dependency on C-001/C-002
 
@@ -15,15 +17,15 @@ They do not parse, sort, deduplicate, fill, repair, or resample source data.
 
 Every output reuses C-002 `LevelCandidate`, `PriceRange`, `ScaleDescriptor`,
 `ProvenanceRef`, `StructureSourceType`, `BoundarySide`, `MarketRole`,
-`ConfirmationStatus`, and `LifecycleState`. C-003A creates no parallel domain
+`ConfirmationStatus`, and `LifecycleState`. C-003 creates no parallel domain
 model.
 
 ## 3. Research-Only Status
 
-The Pivot detector is a reproducible baseline for later comparison. It is not
-hard-coded into the production core, is not approved as optimal, and does not
-advance C-003B or C-004. No parameter optimization or real-trading conclusion
-is part of this stage.
+Every detector is a reproducible baseline for later comparison. None is
+hard-coded into the production core or approved as optimal. C-003B performs no
+parameter search, detector ranking, or real-trading evaluation and does not
+advance C-004 or C-005.
 
 ## 4. Detector Protocol
 
@@ -219,22 +221,202 @@ candidate and does not treat file termination as confirmation.
 Historical graphics may later backplot to OriginTime, but events can become
 effective only from ConfirmTime.
 
-## 19. Out of Scope
+## 19. Causal Prefix for Stateful Detectors
 
-C-003A contains no ATR reversal, ZigZag, structure-break detector, combined
-detector, periodic high/low, historical reaction support/resistance, clustering,
-lifecycle engine, resonance, Active Box selection, Fibonacci, Imbalance, RSI,
-volume/momentum filter, signal, EA, Pine Script, network download, optimization,
-or real-trading conclusion.
+ATR state and both structure-confirmation detectors consume a fixed sequence
+prefix. As-Of starts at the first source bar and stops at the first bar that is
+incomplete or whose `available_time` follows `processing_time`. That blocker
+and every later bar are excluded, even when a later bar has an earlier arrival
+time. No bar is skipped, sorted, filled, repaired, or synthesized.
 
-## 20. C-003B Plan
+For fixed index `i`:
 
-C-003B remains deferred. Subject to a separate approved task, it may add the
-other Issue #5 baselines under the same protocol and test them independently
-before any comparison or selection. C-003A does not implement or scaffold
-those detectors and does not announce optimal parameters.
+```text
+prefix_available_time[i] = max(
+    bar.available_time for bar in bars[0:i+1]
+)
+```
 
-## 21. Open Questions
+Any state fact confirmed while processing index `i` has ConfirmTime no earlier
+than this prefix maximum. Batch, As-Of, and replay use the same fixed ordering.
+
+## 20. ATR True Range and SMA
+
+C-003B uses exact `Decimal` arithmetic. For the first bar:
+
+```text
+TR[0] = high[0] - low[0]
+```
+
+For each later bar:
+
+```text
+TR[i] = max(
+    high[i] - low[i],
+    abs(high[i] - close[i-1]),
+    abs(low[i] - close[i-1]),
+)
+```
+
+ATR is deliberately the simple moving average, not Wilder, EMA, or a hidden
+third-party indicator:
+
+```text
+ATR[i] = mean(TR[i-atr_period+1:i+1])
+```
+
+The first ATR exists only after `atr_period` true-range observations. The
+configuration requires `atr_period >= 1`, a finite positive Decimal reversal
+multiplier, an explicit scale, and `strict=True`.
+
+## 21. ATR Turning-Point State Machine
+
+The ATR detector is the C-003B ZigZag baseline. It starts in `UNKNOWN`. At the
+first available ATR it stores that bar's close as `anchor_close`; later closes
+above or below the anchor enter `UP` or `DOWN`. Equal closes retain `UNKNOWN`.
+Entering `UP` starts the extreme at that bar's high; entering `DOWN` starts it
+at that bar's low.
+
+In `UP`, a bar confirms the pre-bar high extreme when:
+
+```text
+bar.low <= pre_bar_high - reversal_multiplier * ATR[i]
+```
+
+The output is an `UPPER` / `RESISTANCE` / `SWING` confirmed candidate. `DOWN`
+is symmetric and emits `LOWER` / `SUPPORT` / `SWING`. Equality reaches the
+threshold. OriginTime is the stored extreme bar timestamp; ConfirmTime is the
+reversal bar's prefix maximum availability.
+
+## 22. Conservative Same-Bar Policy
+
+The detector first tests reversal against the extreme that existed before the
+current bar. It updates the current-direction extreme only when that reversal
+does not occur. It never raises the high or lowers the low and then uses the
+same OHLC bar to confirm that newly observed extreme in the opposite direction.
+Equal highs or lows retain the earlier extreme. This policy avoids inventing an
+unknown intrabar path from OHLC.
+
+## 23. Pivot Structure Confirmation Baseline
+
+`StructureBreakDetector` reuses the unchanged C-003A `PivotDetector` as its
+seed. Only confirmed `SWING` candidates with the approved side/role mapping are
+eligible; seed OriginTime never grants visibility. The latest confirmed seed
+of a side replaces that side's unresolved pending seed.
+
+For a pending upper seed, the reference is the latest causally available lower
+seed whose OriginTime precedes the pending upper OriginTime. The lower case is
+symmetric. A break bar must follow the complete confirmation windows of both
+seeds. A right-window bar used to confirm a Pivot cannot simultaneously act as
+an earlier structure-confirmation bar.
+
+## 24. Close-Only Break Rule
+
+The supported basis is exactly `CLOSE`, and the buffer is a finite non-negative
+Decimal:
+
+```text
+pending upper: close <= reference lower.low - break_buffer
+pending lower: close >= reference upper.high + break_buffer
+```
+
+A wick crossing without the close does not confirm. Output OriginTime, price,
+side, role, timeframe, and scale come from the pending seed. Output ConfirmTime
+is:
+
+```text
+max(
+    pending_seed.confirm_time,
+    reference_seed.confirm_time,
+    prefix_available_time[break_bar_index],
+)
+```
+
+## 25. ATR Plus Structure Confirmation
+
+`AtrStructureBreakDetector` reuses confirmed ATR turning-point candidates as
+seeds and applies the same close-only break, earlier-opposing-reference, latest
+pending replacement, buffer, and causal-prefix rules. Its output represents an
+ATR turning point that subsequently received opposing-structure close
+confirmation. It does not return ordinary ATR seeds unchanged.
+
+The combined candidate retains the ATR seed's OriginTime and price, while its
+ConfirmTime is no earlier than the pending ATR seed, its reference ATR seed,
+and the break bar's causal prefix time. Its candidate prefix, structure family,
+source module, and provenance are distinct from both plain ATR and Pivot-based
+structure outputs.
+
+## 26. Deterministic Candidate IDs
+
+All C-003B IDs use SHA-256 over canonical UTF-8 JSON with sorted keys and
+compact separators. ATR identity includes detector/version/policy, ATR period,
+multiplier, side, OriginTime, ConfirmTime, exact price, origin and confirmation
+bar keys, ATR value, finite ATR-window facts, scale, strict mode, and the
+same-bar policy.
+
+Structure identity includes the complete detector config, pending and
+reference seed IDs, break bar key, exact break close and buffer, side, price,
+OriginTime, and ConfirmTime. No ID uses array position alone, filename,
+`datetime.now()`, random UUID, Python `hash()`, or the final file length.
+
+## 27. Bounded Provenance
+
+ATR provenance references its finite ATR window plus origin and confirmation
+bars. Structure provenance references exactly the pending seed ID, reference
+seed ID, and break bar key, with bounded notes for detector, policy, close
+basis, exact close, buffer, and replacement rule. It never embeds an unlimited
+history or mutates either seed.
+
+## 28. Batch, As-Of, and Replay Parity
+
+Batch processes the complete validated fixed sequence and retains each factual
+ConfirmTime. As-Of applies the causal prefix and returns no candidate before its
+ConfirmTime. Default replay advances over unique source `available_time`
+values, calls As-Of, and requires first appearance to equal candidate
+ConfirmTime. Events remain ordered by `(confirm_time, candidate_id)`.
+
+Parity compares full candidate identity, OriginTime, ConfirmTime, side, exact
+price, structure family, provenance, and first-seen time rather than final price
+alone.
+
+## 29. Report Semantics
+
+The public `SwingDetectionReport` schema remains unchanged. For the ATR
+detector, `evaluated_center_count` counts bars with an available ATR,
+`leading_incomplete_count` counts warm-up bars,
+`trailing_incomplete_count` records one unresolved directional endpoint when
+present, and `rejected_window_count` counts trend bars that did not reverse.
+
+For structure confirmation, `evaluated_center_count` counts eligible pending,
+reference, and break-bar close evaluations; `trailing_incomplete_count` counts
+unresolved pending sides; and `rejected_window_count` counts evaluated closes
+that did not reach the threshold. Warnings disclose warm-up, `UNKNOWN`, gaps,
+unresolved state, and causal-prefix truncation. No field contains a synthetic
+or estimated count.
+
+## 30. Known Limitations and Deferred Comparison
+
+- The stateful APIs operate on a prevalidated offline sequence; they do not
+  define live watermarks, correction events, or permanently missing-bar policy.
+- ATR uses only the explicitly fixed SMA definition in this baseline.
+- The conservative same-bar rule intentionally declines to infer intrabar path.
+- Latest-confirmed pending replacement is a baseline policy, not a claim of
+  optimality.
+- Gaps are reported and retained; no session/calendar rule splits state.
+- No detector comparison, parameter optimization, sensitivity analysis,
+  out-of-sample ranking, or final selection is performed in C-003B.
+- Candidate pooling and clustering belong to C-005. Lifecycle transitions,
+  including `FRESH`, `TESTED`, and `BROKEN`, belong to C-006.
+
+## 31. Out of Scope
+
+C-003B contains no periodic high/low, historical reaction support/resistance,
+Level Pool, clustering, deduplication, lifecycle engine, resonance, Active Box,
+Fibonacci, Imbalance, RSI, volume/momentum filter, signal, EA, Pine Script,
+network download, parameter optimization, or real-trading conclusion. It does
+not start C-005.
+
+## 32. Open Questions
 
 - Which explicit H/EXP record will govern comparative detector evaluation?
 - Which session/calendar policy, if any, should prevent actual-bar windows from
