@@ -43,6 +43,9 @@
 - Added the causal C-006A structure lifecycle event ledger and immutable state snapshots.
 - Added parameterized Test, Weakening, close-only Break, Flip, and Retirement baselines.
 - Added lifecycle Batch, As-Of, replay parity, deterministic serialization, and no-lookahead coverage.
+- Added the stable `Direction` domain enum.
+- Revised `TimeframeState` to carry separate Candidate and Confirmed boundary pairs.
+- Introduced `TimeframeState` schema version 2 with no silent v1 migration.
 
 ### Added
 - 初始化 MSA 项目仓库。

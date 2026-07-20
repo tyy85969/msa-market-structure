@@ -11,6 +11,7 @@ from msa.domain import (
     BoundaryRef,
     BoundarySide,
     ConfirmationStatus,
+    Direction,
     DomainAvailabilityError,
     DomainValidationError,
     LevelCandidate,
@@ -156,18 +157,21 @@ def test_state_cannot_reference_future_boundary() -> None:
     future_upper = boundary(BoundarySide.UPPER, 4)
     with pytest.raises(DomainValidationError, match="cannot be later"):
         TimeframeState(
-            "state-1",
-            "v1",
-            "XAUUSD",
-            Timeframe.H1,
-            SCALE,
-            BASE,
-            BASE + timedelta(hours=3),
-            BASE + timedelta(hours=3),
-            future_upper,
-            None,
-            (),
-            provenance("state-1"),
+            state_id="state-1",
+            state_version="v2",
+            symbol="XAUUSD",
+            timeframe=Timeframe.H1,
+            scale=SCALE,
+            direction=Direction.UNKNOWN,
+            origin_time=BASE,
+            confirm_time=BASE + timedelta(hours=3),
+            as_of_time=BASE + timedelta(hours=3),
+            candidate_upper_boundary=future_upper,
+            candidate_lower_boundary=None,
+            confirmed_upper_boundary=None,
+            confirmed_lower_boundary=None,
+            forming_candidate_ids=(),
+            provenance=provenance("state-1"),
         )
 
 
@@ -321,19 +325,23 @@ def test_domain_construction_does_not_mutate_input_snapshots() -> None:
     upper = boundary(BoundarySide.UPPER, 1)
     lower_before = lower.to_dict()
     upper_before = upper.to_dict()
-    TimeframeState(
-        "state-1",
-        "v1",
-        "XAUUSD",
-        Timeframe.H1,
-        SCALE,
-        BASE,
-        BASE + timedelta(hours=2),
-        BASE + timedelta(hours=2),
-        upper,
-        lower,
-        ("forming-b", "forming-a"),
-        provenance("state-1"),
+    state = TimeframeState(
+        state_id="state-1",
+        state_version="v2",
+        symbol="XAUUSD",
+        timeframe=Timeframe.H1,
+        scale=SCALE,
+        direction=Direction.UNKNOWN,
+        origin_time=BASE,
+        confirm_time=BASE + timedelta(hours=2),
+        as_of_time=BASE + timedelta(hours=2),
+        candidate_upper_boundary=upper,
+        candidate_lower_boundary=lower,
+        confirmed_upper_boundary=None,
+        confirmed_lower_boundary=None,
+        forming_candidate_ids=("forming-b", "forming-a"),
+        provenance=provenance("state-1"),
     )
     assert lower.to_dict() == lower_before
     assert upper.to_dict() == upper_before
+    assert state.forming_candidate_ids == ("forming-a", "forming-b")

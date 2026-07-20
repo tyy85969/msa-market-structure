@@ -91,6 +91,16 @@ class LifecycleState(DomainEnum):
     RETIRED = "RETIRED"
 
 
+class Direction(DomainEnum):
+    """Stored per-timeframe structure direction without inference behavior."""
+
+    UNKNOWN = "UNKNOWN"
+    UP = "UP"
+    DOWN = "DOWN"
+    RANGE = "RANGE"
+    TURNING = "TURNING"
+
+
 class StructureObjectKind(DomainEnum):
     """Concrete domain object represented by a boundary snapshot."""
 

@@ -167,17 +167,33 @@ object version changes.
 ## 14. TimeframeState
 
 `TimeframeState` is an immutable snapshot identified by explicit `state_id`
-and non-empty string `state_version`. It contains symbol, Timeframe, scale,
-OriginTime, ConfirmTime, AsOfTime, optional upper and lower `BoundaryRef`
-snapshots, forming candidate IDs, and provenance.
+and non-empty string `state_version`. It contains symbol, Timeframe, scale, a
+stored `Direction`, OriginTime, ConfirmTime, AsOfTime, separate optional
+Candidate upper/lower and Confirmed upper/lower `BoundaryRef` snapshots,
+forming candidate IDs, and provenance.
 
-An empty state, a state with only one boundary, or a state with both boundaries
-is valid. Referenced boundary symbols must match the state. Upper and lower
-slots require their corresponding sides. Boundary ConfirmTimes cannot exceed
-the state's ConfirmTime. When both exist, the lower range high cannot exceed
-the upper range low. Forming IDs must be unique and are stored in sorted order.
+Candidate and Confirmed are distinct semantic slots. Candidate accepts
+`FRESH`, `TESTED`, `WEAKENED`, and `FLIPPED`; Confirmed accepts `TESTED`,
+`WEAKENED`, and `FLIPPED`, but not `FRESH`. `BROKEN`, `RETIRED`, and the
+pre-activation `CONFIRMED` lifecycle do not represent current effective
+boundaries. A `TESTED`, `WEAKENED`, or `FLIPPED` boundary may occupy both a
+Candidate and Confirmed slot as two views of the same immutable fact. The two
+groups may also reference different objects.
 
-The model implements no boundary selection or state-update engine.
+Every occupied upper slot requires `UPPER/RESISTANCE`, every occupied lower
+slot requires `LOWER/SUPPORT`, and all boundary symbols must match the state.
+Boundary ConfirmTimes cannot exceed the state's ConfirmTime. Candidate and
+Confirmed pairs independently require lower range high not to exceed upper
+range low; no cross-group price constraint is inferred. Boundary timeframe and
+scale may differ from the owning state context, preserving the existing C-002
+aggregation boundary.
+
+`confirm_time` is the causal time of the latest semantic state change represented
+by the snapshot. `as_of_time` may advance while ConfirmTime and state identity
+remain unchanged. The constructor validates only caller-supplied facts and
+`origin_time <= confirm_time <= as_of_time`; it does not select boundaries,
+derive Direction, or update state. Forming IDs remain unique and canonically
+sorted.
 
 ## 15. ActiveBox
 
@@ -209,6 +225,7 @@ touch detection, break detection, weakening, flipping, or retirement policy.
 
 Other stable enums are:
 
+- `Direction`: `UNKNOWN`, `UP`, `DOWN`, `RANGE`, `TURNING`;
 - `StructureSourceType`: `SWING`, `PERIODIC_EXTREME`, `HISTORICAL_REACTION`;
 - `BoundarySide`: `UPPER`, `LOWER`;
 - `MarketRole`: `SUPPORT`, `RESISTANCE`, `NEUTRAL`;
@@ -221,7 +238,10 @@ Other stable enums are:
 Every public C-002 value and domain object supports `to_dict()` and
 `from_dict()`. The public format is JSON-compatible and deterministic:
 
-- every object payload includes `schema_version=1`;
+- every object payload includes its explicit schema version;
+- all existing domain objects remain at schema version 1, except
+  `TimeframeState`, whose revised Candidate/Confirmed contract uses object-level
+  schema version 2;
 - Decimal values are exact strings;
 - datetimes are aware UTC ISO-8601 strings with `+00:00`;
 - enums use their stable string values;
@@ -232,6 +252,11 @@ Every public C-002 value and domain object supports `to_dict()` and
 Deserialization fails closed on an unknown schema version, a missing field, an
 unknown field, an unknown enum, a non-string Decimal, a naive or invalid time,
 or any reconstructed invariant violation. Pickle is not a public format.
+
+TimeframeState v1 payloads are rejected explicitly. The former
+`upper_boundary` and `lower_boundary` fields do not reveal Candidate versus
+Confirmed membership and contain no Direction, so the domain performs no
+silent migration, copying, or default inference.
 
 ## 18. No-Lookahead Guarantees
 
@@ -270,6 +295,10 @@ volume filter, momentum, buy/sell signal, EA, Pine Script, data download,
 database, or parameter optimization.
 
 C-002 does not start C-003 or C-004.
+
+C-006B owns the later `LATEST_CAUSAL` selection policy and the Direction state
+machine. C-007 owns multi-timeframe resonance and Active Box selection. This
+domain contract implements neither layer.
 
 ## 21. Open Questions
 

@@ -17,6 +17,7 @@ from .enums import (
     ActiveBoxStatus,
     BoundarySide,
     ConfirmationStatus,
+    Direction,
     LifecycleState,
     MarketRole,
     StructureObjectKind,
@@ -49,6 +50,9 @@ from .primitives import (
     _wrap_validation,
 )
 from .provenance import ProvenanceRef
+
+
+TIMEFRAME_STATE_SCHEMA_VERSION = 2
 
 
 def _serialize_datetime(value: datetime) -> str:
@@ -776,20 +780,60 @@ class StructureCluster:
             _wrap_validation(object_name, exc)
 
 
+def _strict_timeframe_state_payload(
+    payload: Mapping[str, Any], fields: set[str]
+) -> Mapping[str, Any]:
+    object_name = "TimeframeState"
+    if not isinstance(payload, Mapping):
+        raise DomainSerializationError(f"{object_name} payload must be a mapping")
+    expected = fields | {"schema_version"}
+    keys = set(payload)
+    if "schema_version" not in keys:
+        raise DomainSerializationError(
+            f"{object_name} payload missing fields: ['schema_version']"
+        )
+    version = payload["schema_version"]
+    if not isinstance(version, bool) and version == SCHEMA_VERSION:
+        raise DomainSerializationError(
+            "TimeframeState schema_version 1 cannot be migrated safely: the old "
+            "payload does not identify Candidate versus Confirmed boundaries or "
+            "store Direction"
+        )
+    if isinstance(version, bool) or version != TIMEFRAME_STATE_SCHEMA_VERSION:
+        raise DomainSerializationError(
+            "TimeframeState.schema_version must be "
+            f"{TIMEFRAME_STATE_SCHEMA_VERSION}"
+        )
+    missing = expected - keys
+    unknown = keys - expected
+    if missing:
+        raise DomainSerializationError(
+            f"{object_name} payload missing fields: {sorted(missing)}"
+        )
+    if unknown:
+        raise DomainSerializationError(
+            f"{object_name} payload has unknown fields: {sorted(unknown)}"
+        )
+    return payload
+
+
 @dataclass(frozen=True, slots=True)
 class TimeframeState:
-    """Immutable, causally available structural snapshot for one timeframe."""
+    """Immutable candidate/confirmed boundary snapshot for one context."""
 
     state_id: str
     state_version: str
     symbol: str
     timeframe: Timeframe
     scale: ScaleDescriptor
+    direction: Direction
     origin_time: datetime
     confirm_time: datetime
     as_of_time: datetime
-    upper_boundary: BoundaryRef | None
-    lower_boundary: BoundaryRef | None
+    candidate_upper_boundary: BoundaryRef | None
+    candidate_lower_boundary: BoundaryRef | None
+    confirmed_upper_boundary: BoundaryRef | None
+    confirmed_lower_boundary: BoundaryRef | None
     forming_candidate_ids: tuple[str, ...]
     provenance: ProvenanceRef
 
@@ -800,6 +844,7 @@ class TimeframeState:
         _require_non_empty_text(object_name, "symbol", self.symbol)
         _require_instance(object_name, "timeframe", self.timeframe, Timeframe)
         _require_instance(object_name, "scale", self.scale, ScaleDescriptor)
+        _require_instance(object_name, "direction", self.direction, Direction)
         origin = _normalize_utc_datetime(object_name, "origin_time", self.origin_time)
         confirm = _normalize_utc_datetime(
             object_name, "confirm_time", self.confirm_time
@@ -813,10 +858,49 @@ class TimeframeState:
             raise DomainValidationError(
                 "TimeframeState.as_of_time must be >= TimeframeState.confirm_time"
             )
-        for field_name, boundary, side in (
-            ("upper_boundary", self.upper_boundary, BoundarySide.UPPER),
-            ("lower_boundary", self.lower_boundary, BoundarySide.LOWER),
-        ):
+
+        candidate_states = {
+            LifecycleState.FRESH,
+            LifecycleState.TESTED,
+            LifecycleState.WEAKENED,
+            LifecycleState.FLIPPED,
+        }
+        confirmed_states = {
+            LifecycleState.TESTED,
+            LifecycleState.WEAKENED,
+            LifecycleState.FLIPPED,
+        }
+        slots = (
+            (
+                "candidate_upper_boundary",
+                self.candidate_upper_boundary,
+                BoundarySide.UPPER,
+                MarketRole.RESISTANCE,
+                candidate_states,
+            ),
+            (
+                "candidate_lower_boundary",
+                self.candidate_lower_boundary,
+                BoundarySide.LOWER,
+                MarketRole.SUPPORT,
+                candidate_states,
+            ),
+            (
+                "confirmed_upper_boundary",
+                self.confirmed_upper_boundary,
+                BoundarySide.UPPER,
+                MarketRole.RESISTANCE,
+                confirmed_states,
+            ),
+            (
+                "confirmed_lower_boundary",
+                self.confirmed_lower_boundary,
+                BoundarySide.LOWER,
+                MarketRole.SUPPORT,
+                confirmed_states,
+            ),
+        )
+        for field_name, boundary, side, role, eligible_states in slots:
             if boundary is None:
                 continue
             _require_instance(object_name, field_name, boundary, BoundaryRef)
@@ -829,20 +913,44 @@ class TimeframeState:
                 raise DomainValidationError(
                     f"TimeframeState.{field_name}.boundary_side must be {side.value}"
                 )
+            if boundary.market_role is not role:
+                raise DomainValidationError(
+                    f"TimeframeState.{field_name}.market_role must be {role.value}"
+                )
+            if boundary.lifecycle_state not in eligible_states:
+                allowed = ", ".join(sorted(item.value for item in eligible_states))
+                raise DomainValidationError(
+                    f"TimeframeState.{field_name}.lifecycle_state must be one of "
+                    f"{allowed}"
+                )
             if boundary.confirm_time > confirm:
                 raise DomainValidationError(
                     f"TimeframeState.{field_name}.confirm_time cannot be later "
                     "than TimeframeState.confirm_time"
                 )
-        if (
-            self.lower_boundary is not None
-            and self.upper_boundary is not None
-            and self.lower_boundary.price_range.high
-            > self.upper_boundary.price_range.low
+
+        for pair_name, lower, upper in (
+            (
+                "candidate",
+                self.candidate_lower_boundary,
+                self.candidate_upper_boundary,
+            ),
+            (
+                "confirmed",
+                self.confirmed_lower_boundary,
+                self.confirmed_upper_boundary,
+            ),
         ):
-            raise DomainValidationError(
-                "TimeframeState lower boundary must not be above upper boundary"
-            )
+            if (
+                lower is not None
+                and upper is not None
+                and lower.price_range.high > upper.price_range.low
+            ):
+                raise DomainValidationError(
+                    f"TimeframeState {pair_name} lower boundary must not be above "
+                    f"{pair_name} upper boundary"
+                )
+
         forming_ids = _canonical_text_tuple(
             object_name,
             "forming_candidate_ids",
@@ -875,21 +983,31 @@ class TimeframeState:
         return self
 
     def to_dict(self) -> dict[str, object]:
+        def boundary_payload(boundary: BoundaryRef | None) -> object:
+            return None if boundary is None else boundary.to_dict()
+
         return {
-            "schema_version": SCHEMA_VERSION,
+            "schema_version": TIMEFRAME_STATE_SCHEMA_VERSION,
             "state_id": self.state_id,
             "state_version": self.state_version,
             "symbol": self.symbol,
             "timeframe": self.timeframe.value,
             "scale": self.scale.to_dict(),
+            "direction": self.direction.value,
             "origin_time": _serialize_datetime(self.origin_time),
             "confirm_time": _serialize_datetime(self.confirm_time),
             "as_of_time": _serialize_datetime(self.as_of_time),
-            "upper_boundary": (
-                None if self.upper_boundary is None else self.upper_boundary.to_dict()
+            "candidate_upper_boundary": boundary_payload(
+                self.candidate_upper_boundary
             ),
-            "lower_boundary": (
-                None if self.lower_boundary is None else self.lower_boundary.to_dict()
+            "candidate_lower_boundary": boundary_payload(
+                self.candidate_lower_boundary
+            ),
+            "confirmed_upper_boundary": boundary_payload(
+                self.confirmed_upper_boundary
+            ),
+            "confirmed_lower_boundary": boundary_payload(
+                self.confirmed_lower_boundary
             ),
             "forming_candidate_ids": list(self.forming_candidate_ids),
             "provenance": self.provenance.to_dict(),
@@ -904,15 +1022,23 @@ class TimeframeState:
             "symbol",
             "timeframe",
             "scale",
+            "direction",
             "origin_time",
             "confirm_time",
             "as_of_time",
-            "upper_boundary",
-            "lower_boundary",
+            "candidate_upper_boundary",
+            "candidate_lower_boundary",
+            "confirmed_upper_boundary",
+            "confirmed_lower_boundary",
             "forming_candidate_ids",
             "provenance",
         }
-        data = _strict_payload(payload, object_name, fields)
+        data = _strict_timeframe_state_payload(payload, fields)
+
+        def boundary_from(field_name: str) -> BoundaryRef | None:
+            value = data[field_name]
+            return None if value is None else BoundaryRef.from_dict(value)
+
         try:
             return cls(
                 state_id=data["state_id"],
@@ -922,26 +1048,33 @@ class TimeframeState:
                     data, object_name, "timeframe", Timeframe
                 ),
                 scale=ScaleDescriptor.from_dict(data["scale"]),
+                direction=_deserialize_enum(
+                    data, object_name, "direction", Direction
+                ),
                 origin_time=_deserialize_datetime(data, object_name, "origin_time"),
                 confirm_time=_deserialize_datetime(
                     data, object_name, "confirm_time"
                 ),
                 as_of_time=_deserialize_datetime(data, object_name, "as_of_time"),
-                upper_boundary=(
-                    None
-                    if data["upper_boundary"] is None
-                    else BoundaryRef.from_dict(data["upper_boundary"])
+                candidate_upper_boundary=boundary_from(
+                    "candidate_upper_boundary"
                 ),
-                lower_boundary=(
-                    None
-                    if data["lower_boundary"] is None
-                    else BoundaryRef.from_dict(data["lower_boundary"])
+                candidate_lower_boundary=boundary_from(
+                    "candidate_lower_boundary"
+                ),
+                confirmed_upper_boundary=boundary_from(
+                    "confirmed_upper_boundary"
+                ),
+                confirmed_lower_boundary=boundary_from(
+                    "confirmed_lower_boundary"
                 ),
                 forming_candidate_ids=tuple(
                     _deserialize_list(data, object_name, "forming_candidate_ids")
                 ),
                 provenance=ProvenanceRef.from_dict(data["provenance"]),
             )
+        except DomainSerializationError:
+            raise
         except DomainValidationError as exc:
             _wrap_validation(object_name, exc)
 
