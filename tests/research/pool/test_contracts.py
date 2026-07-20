@@ -1,4 +1,4 @@
-from dataclasses import FrozenInstanceError
+from dataclasses import FrozenInstanceError, replace
 from decimal import Decimal
 import json
 
@@ -10,10 +10,13 @@ from msa.domain import (
     ConfirmationStatus,
     LifecycleState,
     MarketRole,
+    PriceRange,
     ScaleDescriptor,
+    StructureObjectKind,
     StructureSourceType,
 )
 from msa.research.pool import (
+    LevelPoolClusteringError,
     DependencyFamilyAssignment,
     LevelPoolConfig,
     LevelPoolConfigurationError,
@@ -25,9 +28,13 @@ from msa.research.pool import (
 )
 from tests.research.pool.fixtures import (
     SCALE,
+    T0,
+    T1,
+    T2,
     absolute_config,
     assignment,
     candidate,
+    clusterer,
     normalized_config,
     pool_input,
 )
@@ -251,3 +258,112 @@ def test_serialized_tuples_require_ordered_lists() -> None:
 
 def test_fixture_scale_is_not_inferred_from_timeframe() -> None:
     assert candidate(timeframe=Timeframe.W).scale == SCALE
+
+
+def coherent_snapshot():
+    return clusterer().build_as_of(
+        pool_input(
+            (
+                candidate("a", low="100", confirm_time=T1),
+                candidate("b", low="100.5", confirm_time=T1),
+            )
+        ),
+        T1,
+    )
+
+
+@pytest.mark.parametrize(
+    "visible_ids",
+    [
+        ("a", "b", "ghost"),
+        ("a",),
+        ("ghost",),
+    ],
+)
+def test_snapshot_rejects_visible_and_cluster_member_partition_mismatch(
+    visible_ids: tuple[str, ...],
+) -> None:
+    with pytest.raises(LevelPoolClusteringError, match="exactly partition"):
+        replace(coherent_snapshot(), visible_candidate_ids=visible_ids)
+
+
+def test_snapshot_rejects_candidate_membership_in_two_clusters() -> None:
+    snapshot = clusterer().build_as_of(pool_input((candidate("a"),)), T1)
+    duplicate_cluster = replace(
+        snapshot.clusters[0], cluster_id="duplicate-membership-cluster"
+    )
+    duplicate_explanation = replace(
+        snapshot.explanations[0], cluster_id="duplicate-membership-cluster"
+    )
+    with pytest.raises(LevelPoolClusteringError, match="exactly one cluster"):
+        replace(
+            snapshot,
+            clusters=(snapshot.clusters[0], duplicate_cluster),
+            explanations=(snapshot.explanations[0], duplicate_explanation),
+        )
+
+
+def test_snapshot_rejects_non_candidate_member_reference() -> None:
+    snapshot = clusterer().build_as_of(pool_input((candidate("a"),)), T1)
+    cluster = snapshot.clusters[0]
+    nested_ref = replace(
+        cluster.member_refs[0],
+        object_kind=StructureObjectKind.STRUCTURE_CLUSTER,
+    )
+    nested_cluster = replace(cluster, member_refs=(nested_ref,))
+    with pytest.raises(LevelPoolClusteringError, match="LEVEL_CANDIDATE"):
+        replace(snapshot, clusters=(nested_cluster,))
+
+
+def test_valid_clusters_exactly_partition_visible_candidates() -> None:
+    snapshot = coherent_snapshot()
+    member_ids = tuple(
+        sorted(
+            member.object_id
+            for cluster in snapshot.clusters
+            for member in cluster.member_refs
+        )
+    )
+    assert member_ids == snapshot.visible_candidate_ids
+    assert len(member_ids) == len(set(member_ids))
+
+
+@pytest.mark.parametrize(
+    "field_name",
+    [
+        "member_candidate_ids",
+        "raw_member_count",
+        "boundary_side",
+        "price_range",
+        "origin_time",
+        "confirm_time",
+        "source_types",
+        "timeframes",
+        "member_scales",
+        "structure_families",
+        "effective_tolerance",
+        "tolerance_mode",
+        "linkage_mode",
+    ],
+)
+def test_snapshot_rejects_explanation_fact_mismatch(field_name: str) -> None:
+    snapshot = clusterer().build_as_of(pool_input((candidate("a"),)), T1)
+    explanation = replace(snapshot.explanations[0])
+    mismatches = {
+        "member_candidate_ids": ("ghost",),
+        "raw_member_count": 2,
+        "boundary_side": BoundarySide.LOWER,
+        "price_range": PriceRange(Decimal("90"), Decimal("90")),
+        "origin_time": T0.replace(minute=1),
+        "confirm_time": T2,
+        "source_types": (StructureSourceType.PERIODIC_EXTREME,),
+        "timeframes": (Timeframe.H4,),
+        "member_scales": (ScaleDescriptor("other-scale", 9),),
+        "structure_families": ("other-family",),
+        "effective_tolerance": Decimal("2"),
+        "tolerance_mode": ToleranceMode.NORMALIZED,
+        "linkage_mode": "COMPLETE_LINK",
+    }
+    object.__setattr__(explanation, field_name, mismatches[field_name])
+    with pytest.raises(LevelPoolClusteringError, match="explanation"):
+        replace(snapshot, explanations=(explanation,))

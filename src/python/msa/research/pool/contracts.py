@@ -18,6 +18,7 @@ from msa.domain import (
     PriceRange,
     ScaleDescriptor,
     StructureCluster,
+    StructureObjectKind,
     StructureSourceType,
 )
 
@@ -1248,6 +1249,22 @@ class LevelPoolSnapshot:
             raise LevelPoolClusteringError(
                 "cluster.confirm_time cannot exceed snapshot.as_of_time"
             )
+        all_member_ids: list[str] = []
+        for cluster in clusters:
+            for member in cluster.member_refs:
+                if member.object_kind is not StructureObjectKind.LEVEL_CANDIDATE:
+                    raise LevelPoolClusteringError(
+                        "snapshot cluster members must reference LEVEL_CANDIDATE objects"
+                    )
+                all_member_ids.append(member.object_id)
+        if len(set(all_member_ids)) != len(all_member_ids):
+            raise LevelPoolClusteringError(
+                "each visible candidate must belong to exactly one cluster"
+            )
+        if tuple(sorted(all_member_ids)) != visible:
+            raise LevelPoolClusteringError(
+                "visible_candidate_ids must exactly partition all cluster members"
+            )
         if not isinstance(self.explanations, tuple) or any(
             not isinstance(item, ClusterExplanation)
             for item in self.explanations
@@ -1266,6 +1283,71 @@ class LevelPoolSnapshot:
             )
         if not isinstance(self.report, LevelPoolReport):
             raise LevelPoolClusteringError("report must be a LevelPoolReport")
+        for cluster, explanation in zip(clusters, explanations):
+            expected_member_ids = tuple(
+                sorted(member.object_id for member in cluster.member_refs)
+            )
+            expected_scales = tuple(
+                sorted(
+                    {member.scale for member in cluster.member_refs},
+                    key=lambda item: (
+                        item.scale_id,
+                        -1 if item.rank is None else item.rank,
+                    ),
+                )
+            )
+            if explanation.member_candidate_ids != expected_member_ids:
+                raise LevelPoolClusteringError(
+                    "explanation member IDs must equal cluster member refs"
+                )
+            if explanation.raw_member_count != len(cluster.member_refs):
+                raise LevelPoolClusteringError(
+                    "explanation raw_member_count must equal cluster member count"
+                )
+            if explanation.boundary_side is not cluster.boundary_side:
+                raise LevelPoolClusteringError(
+                    "explanation boundary_side must equal cluster boundary_side"
+                )
+            if explanation.price_range != cluster.price_range:
+                raise LevelPoolClusteringError(
+                    "explanation price_range must equal cluster price_range"
+                )
+            if explanation.origin_time != cluster.origin_time:
+                raise LevelPoolClusteringError(
+                    "explanation origin_time must equal cluster origin_time"
+                )
+            if explanation.confirm_time != cluster.confirm_time:
+                raise LevelPoolClusteringError(
+                    "explanation confirm_time must equal cluster confirm_time"
+                )
+            if explanation.source_types != cluster.source_types:
+                raise LevelPoolClusteringError(
+                    "explanation source_types must equal cluster source_types"
+                )
+            if explanation.timeframes != cluster.timeframes:
+                raise LevelPoolClusteringError(
+                    "explanation timeframes must equal cluster timeframes"
+                )
+            if explanation.member_scales != expected_scales:
+                raise LevelPoolClusteringError(
+                    "explanation member_scales must equal canonical cluster member scales"
+                )
+            if explanation.structure_families != cluster.structure_families:
+                raise LevelPoolClusteringError(
+                    "explanation structure_families must equal cluster structure_families"
+                )
+            if explanation.effective_tolerance != self.report.effective_tolerance:
+                raise LevelPoolClusteringError(
+                    "explanation effective_tolerance must equal report effective_tolerance"
+                )
+            if explanation.tolerance_mode is not self.report.tolerance_mode:
+                raise LevelPoolClusteringError(
+                    "explanation tolerance_mode must equal report tolerance_mode"
+                )
+            if explanation.linkage_mode is not self.report.linkage_mode:
+                raise LevelPoolClusteringError(
+                    "explanation linkage_mode must equal report linkage_mode"
+                )
         if self.report.visible_candidate_count != len(visible):
             raise LevelPoolClusteringError(
                 "report visible count must equal visible_candidate_ids"
@@ -1442,6 +1524,36 @@ class LevelPoolHistory:
         ):
             raise LevelPoolClusteringError(
                 "formation event cannot follow final snapshot"
+            )
+        earlier_events: dict[str, ClusterFormationEvent] = {}
+        for event in expected:
+            current_member_ids = {
+                member.object_id for member in event.cluster.member_refs
+            }
+            for superseded_id in event.supersedes_cluster_ids:
+                superseded_event = earlier_events.get(superseded_id)
+                if (
+                    superseded_event is None
+                    or superseded_event.first_seen_time >= event.first_seen_time
+                ):
+                    raise LevelPoolClusteringError(
+                        "supersedes_cluster_ids must reference strictly earlier formation events"
+                    )
+                superseded_member_ids = {
+                    member.object_id
+                    for member in superseded_event.cluster.member_refs
+                }
+                if current_member_ids.isdisjoint(superseded_member_ids):
+                    raise LevelPoolClusteringError(
+                        "a superseded cluster must share at least one member with the new cluster"
+                    )
+            earlier_events[event.cluster.cluster_id] = event
+        final_cluster_ids = {
+            cluster.cluster_id for cluster in self.final_snapshot.clusters
+        }
+        if not final_cluster_ids.issubset(earlier_events):
+            raise LevelPoolClusteringError(
+                "every final snapshot cluster must have a formation event"
             )
 
     def to_dict(self) -> dict[str, object]:

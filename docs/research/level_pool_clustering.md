@@ -145,6 +145,13 @@ structure families, side, range, times, tolerance, and linkage. Family grouping
 does not remove members. Counts are not converted into a score, correlation
 penalty, rank, or final resonance value.
 
+`ClusterExplanation` is a verifiable derived view of its corresponding
+`StructureCluster`, not an independently editable description. Its member IDs,
+raw count, side, range, OriginTime, ConfirmTime, source types, timeframes,
+canonical member scales, and structure families must exactly match the cluster.
+Its tolerance mode, effective tolerance, and linkage must match the snapshot
+report.
+
 ## 22. Batch Snapshot
 
 Batch history advances through the UTC-sorted unique candidate ConfirmTimes.
@@ -159,6 +166,12 @@ candidates with `confirm_time <= processing_time`. OriginTime, file position,
 and system time grant no visibility. Snapshot cluster and explanation order is
 deterministic.
 
+`visible_candidate_ids` is the exact partition of all candidate member IDs in
+the snapshot's clusters. Every visible ID occurs in exactly one cluster, every
+cluster member is visible, and one candidate cannot belong to two price
+clusters. Cluster members must be `LEVEL_CANDIDATE` references; nested cluster
+references are rejected.
+
 ## 24. Cluster formation history
 
 A newly observed component creates a `ClusterFormationEvent`. Its
@@ -170,6 +183,17 @@ a new immutable cluster identity; an earlier cluster object is never edited.
 A new cluster lists prior-snapshot cluster IDs that share at least one member
 and have a different ID. A bridge may supersede two prior clusters. This is
 snapshot lineage only, not lifecycle retirement, break, or invalidation.
+
+Every supersedes ID must name a strictly earlier formation event whose cluster
+shares at least one member with the new cluster. It cannot name the current
+event, a same-time or future event, or a missing cluster. Unaffected historical
+clusters need not be superseded, and superseded historical clusters may remain
+in formation history without appearing in the final snapshot. Every cluster in
+the final snapshot must have its own formation event.
+
+These checks validate the immutable Snapshot/History contract. They do not
+recompute the full snapshot sequence and do not introduce C-006 lifecycle
+states such as `RETIRED`.
 
 ## 26. Replay
 

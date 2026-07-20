@@ -1,4 +1,5 @@
 from dataclasses import FrozenInstanceError
+from decimal import Decimal
 import json
 from pathlib import Path
 
@@ -135,3 +136,123 @@ def test_source_has_no_pickle_clock_uuid_or_builtin_hash_identity() -> None:
     assert "datetime.now" not in text
     assert "uuid4" not in text
     assert "hash(" not in text
+
+
+@pytest.mark.parametrize(
+    "kind",
+    [
+        "snapshot-membership",
+        "snapshot-member-kind",
+        "snapshot-explanation",
+        "history-missing-supersedes",
+        "history-future-supersedes",
+        "history-final-event",
+    ],
+)
+def test_contradictory_nested_payloads_fail_as_serialization_errors(
+    kind: str,
+) -> None:
+    if kind.startswith("snapshot"):
+        value, factory = objects()["snapshot"]
+        payload = value.to_dict()
+        if kind == "snapshot-membership":
+            payload["visible_candidate_ids"].append("ghost")
+        elif kind == "snapshot-member-kind":
+            payload["clusters"][0]["member_refs"][0]["object_kind"] = (
+                "STRUCTURE_CLUSTER"
+            )
+        else:
+            payload["explanations"][0]["boundary_side"] = "LOWER"
+    else:
+        value, factory = objects()["history"]
+        payload = value.to_dict()
+        if kind == "history-missing-supersedes":
+            payload["formation_events"][-1]["supersedes_cluster_ids"] = [
+                "missing-cluster"
+            ]
+        elif kind == "history-future-supersedes":
+            future_id = payload["formation_events"][-1]["cluster"]["cluster_id"]
+            payload["formation_events"][0]["supersedes_cluster_ids"] = [future_id]
+        else:
+            payload["formation_events"] = payload["formation_events"][:-1]
+    with pytest.raises(LevelPoolSerializationError):
+        factory(payload)
+
+
+@pytest.mark.parametrize(
+    "field_name",
+    [
+        "member_candidate_ids",
+        "raw_member_count",
+        "boundary_side",
+        "price_range",
+        "origin_time",
+        "confirm_time",
+        "source_types",
+        "timeframes",
+        "member_scales",
+        "structure_families",
+        "effective_tolerance",
+        "tolerance_mode",
+        "linkage_mode",
+    ],
+)
+def test_serialized_explanation_mismatch_is_wrapped(
+    field_name: str,
+) -> None:
+    snapshot = objects()["snapshot"][0]
+    payload = snapshot.to_dict()
+    explanation = payload["explanations"][0]
+    mismatches = {
+        "member_candidate_ids": ["ghost"],
+        "raw_member_count": 99,
+        "boundary_side": "LOWER",
+        "price_range": {
+            "schema_version": 1,
+            "low": "90",
+            "high": "90",
+        },
+        "origin_time": T1.isoformat(),
+        "confirm_time": T1.isoformat(),
+        "source_types": ["PERIODIC_EXTREME"],
+        "timeframes": ["H4"],
+        "member_scales": [
+            {"schema_version": 1, "scale_id": "other", "rank": 8}
+        ],
+        "structure_families": ["other-family"],
+        "effective_tolerance": str(Decimal("2")),
+        "tolerance_mode": "NORMALIZED",
+        "linkage_mode": "COMPLETE_LINK",
+    }
+    explanation[field_name] = mismatches[field_name]
+    with pytest.raises(LevelPoolSerializationError):
+        LevelPoolSnapshot.from_dict(payload)
+
+
+def test_serialized_duplicate_cluster_membership_is_wrapped() -> None:
+    snapshot = clusterer().build_as_of(pool_input((candidate("a"),)), T1)
+    payload = snapshot.to_dict()
+    duplicate_cluster = dict(payload["clusters"][0])
+    duplicate_cluster["cluster_id"] = "duplicate-cluster"
+    duplicate_explanation = dict(payload["explanations"][0])
+    duplicate_explanation["cluster_id"] = "duplicate-cluster"
+    payload["clusters"].append(duplicate_cluster)
+    payload["explanations"].append(duplicate_explanation)
+    with pytest.raises(LevelPoolSerializationError):
+        LevelPoolSnapshot.from_dict(payload)
+
+
+def test_serialized_supersedes_without_shared_member_is_wrapped() -> None:
+    history = clusterer().build_batch(
+        pool_input(
+            (
+                candidate("a", low="100", confirm_time=T1),
+                candidate("b", low="110", confirm_time=T2),
+            )
+        )
+    )
+    payload = history.to_dict()
+    old_id = payload["formation_events"][0]["cluster"]["cluster_id"]
+    payload["formation_events"][1]["supersedes_cluster_ids"] = [old_id]
+    with pytest.raises(LevelPoolSerializationError):
+        LevelPoolHistory.from_dict(payload)

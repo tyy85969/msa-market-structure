@@ -1,8 +1,13 @@
+from dataclasses import replace
 from datetime import datetime, timedelta
 
 import pytest
 
-from msa.research.pool import LevelPoolInputError, replay_history
+from msa.research.pool import (
+    LevelPoolClusteringError,
+    LevelPoolInputError,
+    replay_history,
+)
 from tests.research.pool.fixtures import (
     T0,
     T1,
@@ -191,3 +196,66 @@ def test_future_price_change_cannot_change_past_snapshot_or_event() -> None:
     )
     assert clusterer().build_as_of(first, T1).to_dict() == clusterer().build_as_of(changed, T1).to_dict()
     assert clusterer().build_batch(first).formation_events[0].to_dict() == clusterer().build_batch(changed).formation_events[0].to_dict()
+
+
+def extension_history():
+    return clusterer().build_batch(
+        pool_input(
+            (
+                candidate("a", low="100", confirm_time=T1),
+                candidate("b", low="100.5", confirm_time=T2),
+            )
+        )
+    )
+
+
+def test_history_rejects_nonexistent_supersedes_cluster_id() -> None:
+    history = extension_history()
+    first, second = history.formation_events
+    invalid_second = replace(
+        second, supersedes_cluster_ids=("missing-cluster",)
+    )
+    with pytest.raises(LevelPoolClusteringError, match="strictly earlier"):
+        replace(history, formation_events=(first, invalid_second))
+
+
+def test_history_rejects_supersedes_reference_to_future_event() -> None:
+    history = extension_history()
+    first, second = history.formation_events
+    invalid_first = replace(
+        first, supersedes_cluster_ids=(second.cluster.cluster_id,)
+    )
+    with pytest.raises(LevelPoolClusteringError, match="strictly earlier"):
+        replace(history, formation_events=(invalid_first, second))
+
+
+def test_history_rejects_superseded_cluster_without_shared_member() -> None:
+    history = clusterer().build_batch(
+        pool_input(
+            (
+                candidate("a", low="100", confirm_time=T1),
+                candidate("b", low="110", confirm_time=T2),
+            )
+        )
+    )
+    first, second = history.formation_events
+    invalid_second = replace(
+        second, supersedes_cluster_ids=(first.cluster.cluster_id,)
+    )
+    with pytest.raises(LevelPoolClusteringError, match="share at least one member"):
+        replace(history, formation_events=(first, invalid_second))
+
+
+def test_history_rejects_final_cluster_without_formation_event() -> None:
+    history = extension_history()
+    with pytest.raises(LevelPoolClusteringError, match="final snapshot cluster"):
+        replace(history, formation_events=(history.formation_events[0],))
+
+
+def test_superseded_historical_cluster_need_not_remain_in_final_snapshot() -> None:
+    history = extension_history()
+    old_cluster_id = history.formation_events[0].cluster.cluster_id
+    assert old_cluster_id in history.formation_events[1].supersedes_cluster_ids
+    assert old_cluster_id not in {
+        item.cluster_id for item in history.final_snapshot.clusters
+    }
