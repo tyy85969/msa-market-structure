@@ -7,6 +7,7 @@ from tests.research.levels.fixtures import (
     bar,
     reaction_generator,
     reaction_input,
+    seed,
     upper_success_bars,
 )
 
@@ -71,3 +72,87 @@ def test_batch_and_replay_preserve_exact_reaction_provenance_and_first_time() ->
     assert [event.to_dict() for event in replay] == [
         event.to_dict() for event in batch
     ]
+
+
+def test_exact_horizon_candidate_first_appears_on_confirmation_bar() -> None:
+    bars = (
+        bar(0, high="90", low="88", open="89", close="89"),
+        bar(1, high="101", low="99", open="100", close="100"),
+        bar(2, high="101", low="98", open="100", close="100"),
+        bar(3, high="98", low="95", open="97", close="96"),
+        bar(4, high="101", low="99", open="100", close="100"),
+        bar(5, high="101", low="98", open="100", close="100"),
+        bar(6, high="98", low="95", open="97", close="96"),
+    )
+    data = reaction_input(bars)
+    generator = reaction_generator(confirmation_horizon_bars=2)
+
+    assert generator.generate_as_of(
+        data,
+        bars[6].available_time - timedelta(microseconds=1),
+    ).candidates == ()
+    candidate = generator.generate_as_of(
+        data,
+        bars[6].available_time,
+    ).candidates[0]
+
+    assert candidate.confirm_time == bars[6].available_time
+    assert replay_events(generator, data)[0].first_seen_time == candidate.confirm_time
+
+
+def test_ineligible_horizon_member_blocks_later_close_away() -> None:
+    late_seed = seed(confirm_time=START + timedelta(hours=7))
+    bars = (
+        bar(0, high="90", low="88", open="89", close="89"),
+        bar(
+            1,
+            high="101",
+            low="99",
+            open="100",
+            close="100",
+            available_time=START + timedelta(hours=8),
+        ),
+        bar(
+            2,
+            high="98",
+            low="95",
+            open="97",
+            close="96",
+            available_time=START + timedelta(hours=8),
+        ),
+        bar(
+            3,
+            high="90",
+            low="88",
+            open="89",
+            close="89",
+            available_time=START + timedelta(hours=8),
+        ),
+        bar(
+            4,
+            high="101",
+            low="99",
+            open="100",
+            close="100",
+            available_time=START + timedelta(hours=8),
+        ),
+        bar(
+            5,
+            high="101",
+            low="98",
+            open="100",
+            close="100",
+            available_time=START + timedelta(hours=8),
+        ),
+        bar(6, high="101", low="98", open="100", close="100"),
+        bar(7, high="98", low="95", open="97", close="96"),
+    )
+    data = reaction_input(bars, (late_seed,))
+    generator = reaction_generator(confirmation_horizon_bars=2)
+
+    assert generator.generate_batch(data).candidates == ()
+    assert generator.generate_as_of(
+        data,
+        bars[7].available_time,
+    ).candidates == ()
+    assert replay_events(generator, data) == ()

@@ -288,63 +288,69 @@ class HistoricalReactionGenerator:
                 and bar.available_time > seed.confirm_time
                 and bar.is_complete
             )
-            if not eligible:
-                continue
-
-            if active is None:
-                if not _touches(bar, zone):
+            if active is not None:
+                distance = index - active.touch_index
+                if distance < 1:
                     continue
-                if (
-                    last_success_touch_index is not None
-                    and index - last_success_touch_index
-                    < self.config.min_separation_bars
+                if distance > self.config.confirmation_horizon_bars:
+                    rejected_attempts += 1
+                    active = None
+                    continue
+                if not eligible:
+                    if distance == self.config.confirmation_horizon_bars:
+                        rejected_attempts += 1
+                        active = None
+                    continue
+                if _penetrates(
+                    bar,
+                    zone,
+                    seed.boundary_side,
+                    self.config.max_penetration,
                 ):
+                    rejected_attempts += 1
+                    active = None
                     continue
-                active = _Attempt(index, bar)
-                evaluated_touches += 1
-                continue
-
-            distance = index - active.touch_index
-            if distance <= 0:
-                continue
-            if _penetrates(bar, zone, seed.boundary_side, self.config.max_penetration):
-                rejected_attempts += 1
-                active = None
-                continue
-            if _confirms_rejection(
-                bar,
-                zone,
-                seed.boundary_side,
-                self.config.min_reaction_distance,
-            ):
-                confirm_time = max(seed.confirm_time, prefix_times[index])
-                evidence = _ReactionEvidence(
-                    touch_index=active.touch_index,
-                    confirmation_index=index,
-                    touch_bar=active.touch_bar,
-                    confirmation_bar=bar,
-                    confirm_time=confirm_time,
-                )
-                successes.append(evidence)
-                last_success_touch_index = active.touch_index
-                active = None
-                if len(successes) == self.config.min_reactions:
-                    candidate = self._candidate(seed, zone, tuple(successes))
-                    return _SeedEvaluation(
-                        candidate,
-                        evaluated_touches,
-                        len(successes),
-                        rejected_attempts,
+                if _confirms_rejection(
+                    bar,
+                    zone,
+                    seed.boundary_side,
+                    self.config.min_reaction_distance,
+                ):
+                    confirm_time = max(seed.confirm_time, prefix_times[index])
+                    evidence = _ReactionEvidence(
+                        touch_index=active.touch_index,
+                        confirmation_index=index,
+                        touch_bar=active.touch_bar,
+                        confirmation_bar=bar,
+                        confirm_time=confirm_time,
                     )
+                    successes.append(evidence)
+                    last_success_touch_index = active.touch_index
+                    active = None
+                    if len(successes) == self.config.min_reactions:
+                        candidate = self._candidate(seed, zone, tuple(successes))
+                        return _SeedEvaluation(
+                            candidate,
+                            evaluated_touches,
+                            len(successes),
+                            rejected_attempts,
+                        )
+                    continue
+                if distance == self.config.confirmation_horizon_bars:
+                    rejected_attempts += 1
+                    active = None
                 continue
-            if distance >= self.config.confirmation_horizon_bars:
-                rejected_attempts += 1
-                active = None
 
-        if active is not None:
-            last_index = len(bars) - 1
-            if last_index - active.touch_index >= self.config.confirmation_horizon_bars:
-                rejected_attempts += 1
+            if not eligible or not _touches(bar, zone):
+                continue
+            if (
+                last_success_touch_index is not None
+                and index - last_success_touch_index
+                < self.config.min_separation_bars
+            ):
+                continue
+            active = _Attempt(index, bar)
+            evaluated_touches += 1
         return _SeedEvaluation(
             None,
             evaluated_touches,

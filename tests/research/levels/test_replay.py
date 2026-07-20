@@ -68,6 +68,28 @@ def test_reaction_replay_uses_bar_and_seed_schedule_union() -> None:
     assert events[0].first_seen_time == START + timedelta(hours=10)
 
 
+def test_exact_horizon_reaction_has_batch_replay_parity() -> None:
+    bars = (
+        bar(0, high="90", low="88", open="89", close="89"),
+        bar(1, high="101", low="99", open="100", close="100"),
+        bar(2, high="101", low="98", open="100", close="100"),
+        bar(3, high="98", low="95", open="97", close="96"),
+        bar(4, high="101", low="99", open="100", close="100"),
+        bar(5, high="101", low="98", open="100", close="100"),
+        bar(6, high="98", low="95", open="97", close="96"),
+    )
+    data = reaction_input(bars)
+    generator = reaction_generator(confirmation_horizon_bars=2)
+
+    batch = tuple(generator.iter_events(data))
+    replay = replay_events(generator, data)
+
+    assert [event.to_dict() for event in replay] == [
+        event.to_dict() for event in batch
+    ]
+    assert replay[0].first_seen_time == bars[6].available_time
+
+
 def test_replay_rejects_naive_schedule_time() -> None:
     with pytest.raises(LevelInputError, match="timezone-aware"):
         replay_events(

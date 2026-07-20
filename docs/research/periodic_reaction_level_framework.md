@@ -121,13 +121,22 @@ path. Only later actual canonical bars may confirm or reject the attempt.
 
 ## 13. Rejection Confirmation
 
-Within `confirmation_horizon_bars` subsequent actual bars:
+For touch index `T` and `H = confirmation_horizon_bars`, the confirmation
+window is inclusive and fixed:
+
+```text
+T + 1 <= confirmation_index <= T + H
+```
+
+Within those subsequent actual bars:
 
 - UPPER/RESISTANCE succeeds when `bar.close <= zone.low - min_reaction_distance`;
 - LOWER/SUPPORT succeeds when `bar.close >= zone.high + min_reaction_distance`.
 
 A wick reaching the close-away threshold is insufficient. The close condition
-is deliberately conservative and side-symmetric.
+is deliberately conservative and side-symmetric. A bar at distance `H` may
+still penetrate or confirm. A bar at distance greater than `H` cannot
+penetrate, confirm, or otherwise revive the expired attempt.
 
 ## 14. Penetration Failure
 
@@ -138,7 +147,17 @@ Before success:
 
 If a later bar contains both penetration and a close-away, penetration wins.
 This fail-closed ordering avoids guessing which intrabar path occurred first.
-An attempt also fails when its horizon expires without success.
+An attempt also fails once, and only once, when its inclusive horizon ends
+without success. A bar that causes penetration, confirmation, or horizon
+expiry cannot also start a new touch attempt for the same seed.
+
+Horizon distance counts every actual `CanonicalBar` sequence member after the
+touch. Gaps do not create synthetic bars, and wall-clock or `available_time`
+intervals do not extend or compress the window. An actual bar that is not
+reaction-eligible because `bar.timestamp <= seed.origin_time` or
+`bar.available_time <= seed.confirm_time` still advances the active attempt's
+index distance, but cannot penetrate or confirm it. An ineligible bar at
+distance `H` therefore expires the attempt.
 
 ## 15. Separation
 

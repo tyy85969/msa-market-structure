@@ -14,6 +14,7 @@ from msa.domain import (
     StructureSourceType,
 )
 from msa.research.levels import LevelGenerationInput, LevelInputError
+from msa.research.swing import canonical_bar_key
 from tests.research.levels.fixtures import (
     START,
     bar,
@@ -193,6 +194,182 @@ def test_horizon_expiry_rejects_attempt() -> None:
     )
     assert result.report.rejected_reaction_attempt_count == 1
     assert result.report.successful_reaction_count == 0
+
+
+def test_exact_horizon_confirmation_succeeds_with_deterministic_evidence() -> None:
+    bars = (
+        bar(0, high="90", low="88", open="89", close="89"),
+        bar(1, high="101", low="99", open="100", close="100"),
+        bar(2, high="101", low="98", open="100", close="100"),
+        bar(3, high="98", low="95", open="97", close="96"),
+        bar(4, high="101", low="99", open="100", close="100"),
+        bar(5, high="101", low="98", open="100", close="100"),
+        bar(6, high="98", low="95", open="97", close="96"),
+    )
+    generator = reaction_generator(confirmation_horizon_bars=2)
+
+    first = generator.generate_batch(reaction_input(bars)).candidates[0]
+    second = generator.generate_batch(reaction_input(bars)).candidates[0]
+
+    assert first.confirm_time == bars[6].available_time
+    assert first.last_touch_time == bars[4].timestamp
+    assert first.last_touch_confirm_time == bars[6].available_time
+    assert first.candidate_id == second.candidate_id
+    assert first.provenance == second.provenance
+    assert canonical_bar_key(bars[4]) in first.provenance.parent_object_ids
+    assert canonical_bar_key(bars[6]) in first.provenance.parent_object_ids
+
+
+def test_one_bar_beyond_horizon_cannot_confirm_and_rejects_once() -> None:
+    bars = (
+        bar(0, high="90", low="88", open="89", close="89"),
+        bar(1, high="101", low="99", open="100", close="100"),
+        bar(2, high="98", low="95", open="97", close="96"),
+        bar(3, high="101", low="99", open="100", close="100"),
+        bar(4, high="101", low="98", open="100", close="100"),
+        bar(5, high="101", low="98", open="100", close="100"),
+        bar(6, high="98", low="95", open="97", close="96"),
+    )
+    result = reaction_generator(confirmation_horizon_bars=2).generate_batch(
+        reaction_input(bars)
+    )
+
+    assert result.candidates == ()
+    assert result.report.successful_reaction_count == 1
+    assert result.report.rejected_reaction_attempt_count == 1
+
+
+def test_beyond_horizon_penetration_does_not_reclassify_old_attempt() -> None:
+    late_seed = seed(confirm_time=START + timedelta(hours=7))
+    bars = (
+        bar(0, high="90", low="88", open="89", close="89"),
+        bar(
+            1,
+            high="101",
+            low="99",
+            open="100",
+            close="100",
+            available_time=START + timedelta(hours=8),
+        ),
+        bar(
+            2,
+            high="98",
+            low="95",
+            open="97",
+            close="96",
+            available_time=START + timedelta(hours=8),
+        ),
+        bar(
+            3,
+            high="90",
+            low="88",
+            open="89",
+            close="89",
+            available_time=START + timedelta(hours=8),
+        ),
+        bar(
+            4,
+            high="101",
+            low="99",
+            open="100",
+            close="100",
+            available_time=START + timedelta(hours=8),
+        ),
+        bar(
+            5,
+            high="101",
+            low="98",
+            open="100",
+            close="100",
+            available_time=START + timedelta(hours=8),
+        ),
+        bar(6, high="101", low="98", open="100", close="100"),
+        bar(7, high="104", low="99", open="100", close="100"),
+    )
+    result = reaction_generator(confirmation_horizon_bars=2).generate_batch(
+        reaction_input(bars, (late_seed,))
+    )
+
+    assert result.candidates == ()
+    assert result.report.rejected_reaction_attempt_count == 1
+    assert result.report.evaluated_touch_count == 3
+    assert result.report.successful_reaction_count == 1
+
+
+def test_ineligible_intervening_bar_still_consumes_horizon() -> None:
+    late_seed = seed(confirm_time=START + timedelta(hours=7))
+    bars = (
+        bar(0, high="90", low="88", open="89", close="89"),
+        bar(
+            1,
+            high="101",
+            low="99",
+            open="100",
+            close="100",
+            available_time=START + timedelta(hours=8),
+        ),
+        bar(
+            2,
+            high="98",
+            low="95",
+            open="97",
+            close="96",
+            available_time=START + timedelta(hours=8),
+        ),
+        bar(
+            3,
+            high="90",
+            low="88",
+            open="89",
+            close="89",
+            available_time=START + timedelta(hours=8),
+        ),
+        bar(
+            4,
+            high="101",
+            low="99",
+            open="100",
+            close="100",
+            available_time=START + timedelta(hours=8),
+        ),
+        bar(
+            5,
+            high="101",
+            low="98",
+            open="100",
+            close="100",
+            available_time=START + timedelta(hours=8),
+        ),
+        bar(6, high="101", low="98", open="100", close="100"),
+        bar(7, high="98", low="95", open="97", close="96"),
+    )
+    result = reaction_generator(confirmation_horizon_bars=2).generate_batch(
+        reaction_input(bars, (late_seed,))
+    )
+
+    assert result.candidates == ()
+    assert result.report.successful_reaction_count == 1
+    assert result.report.rejected_reaction_attempt_count == 1
+
+
+def test_horizon_expiry_bar_cannot_restart_touch_attempt() -> None:
+    bars = (
+        bar(0, high="90", low="88", open="89", close="89"),
+        bar(1, high="101", low="99", open="100", close="100"),
+        bar(2, high="98", low="95", open="97", close="96"),
+        bar(3, high="101", low="99", open="100", close="100"),
+        bar(4, high="101", low="98", open="100", close="100"),
+        bar(5, high="101", low="99", open="100", close="100"),
+        bar(6, high="98", low="95", open="97", close="96"),
+    )
+    result = reaction_generator(confirmation_horizon_bars=2).generate_batch(
+        reaction_input(bars)
+    )
+
+    assert result.candidates == ()
+    assert result.report.evaluated_touch_count == 2
+    assert result.report.rejected_reaction_attempt_count == 1
+    assert result.report.successful_reaction_count == 1
 
 
 def test_separation_blocks_too_close_second_touch() -> None:
