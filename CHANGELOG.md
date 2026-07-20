@@ -39,6 +39,7 @@
 - Added fixed causal-prefix, deterministic identity/provenance, and replay parity coverage for C-003B.
 - Added research-only periodic-extreme and historical-reaction level generators.
 - Added deterministic C-004 identity/provenance, causal-prefix, As-Of, and replay tests.
+- Added deterministic C-005 Level Pool clustering, dependency-family explanations, immutable formation history, and no-lookahead replay coverage.
 
 ### Added
 - 初始化 MSA 项目仓库。
