@@ -7,6 +7,7 @@ from msa.domain import (
     ActiveBoxStatus,
     BoundarySide,
     ConfirmationStatus,
+    Direction,
     DomainSerializationError,
     DomainValidationError,
     LifecycleState,
@@ -133,6 +134,7 @@ def test_provenance_rejects_mutable_mapping_metadata() -> None:
         BoundarySide.UPPER,
         MarketRole.SUPPORT,
         ConfirmationStatus.FORMING,
+        Direction.TURNING,
         LifecycleState.FRESH,
         StructureObjectKind.LEVEL_CANDIDATE,
         ActiveBoxStatus.ACTIVE,
@@ -153,3 +155,28 @@ def test_enum_deserialization_rejects_unknown_field() -> None:
         BoundarySide.from_dict(
             {"schema_version": 1, "value": "UPPER", "future": True}
         )
+
+
+def test_direction_has_the_complete_stable_value_set() -> None:
+    assert tuple(item.value for item in Direction) == (
+        "UNKNOWN",
+        "UP",
+        "DOWN",
+        "RANGE",
+        "TURNING",
+    )
+
+
+def test_direction_is_exported_and_supports_standalone_round_trip() -> None:
+    assert Direction.from_dict(Direction.UP.to_dict()) is Direction.UP
+
+
+def test_direction_rejects_unknown_value_field_and_schema() -> None:
+    with pytest.raises(DomainSerializationError, match="unknown"):
+        Direction.from_dict({"schema_version": 1, "value": "SIDEWAYS"})
+    with pytest.raises(DomainSerializationError, match="unknown fields"):
+        Direction.from_dict(
+            {"schema_version": 1, "value": "UP", "score": 1}
+        )
+    with pytest.raises(DomainSerializationError, match="schema_version"):
+        Direction.from_dict({"schema_version": 2, "value": "UP"})

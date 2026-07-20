@@ -11,6 +11,7 @@ from msa.domain import (
     BoundaryRef,
     BoundarySide,
     ConfirmationStatus,
+    Direction,
     DomainSerializationError,
     LevelCandidate,
     LifecycleState,
@@ -113,18 +114,21 @@ def build_objects() -> list[tuple[type[object], object]]:
         provenance,
     )
     state = TimeframeState(
-        "state-1",
-        "v1",
-        "XAUUSD",
-        Timeframe.H1,
-        scale,
-        ORIGIN,
-        CONFIRM,
-        CONFIRM + timedelta(minutes=10),
-        upper,
-        lower,
-        ("forming-b", "forming-a"),
-        provenance,
+        state_id="state-1",
+        state_version="v2",
+        symbol="XAUUSD",
+        timeframe=Timeframe.H1,
+        scale=scale,
+        direction=Direction.RANGE,
+        origin_time=ORIGIN,
+        confirm_time=CONFIRM,
+        as_of_time=CONFIRM + timedelta(minutes=10),
+        candidate_upper_boundary=upper,
+        candidate_lower_boundary=lower,
+        confirmed_upper_boundary=upper,
+        confirmed_lower_boundary=None,
+        forming_candidate_ids=("forming-b", "forming-a"),
+        provenance=provenance,
     )
     box = ActiveBox(
         "box-1",
@@ -163,7 +167,8 @@ def test_all_public_value_and_domain_objects_round_trip(
     model_type: type[object], instance: object
 ) -> None:
     payload = instance.to_dict()  # type: ignore[attr-defined]
-    assert payload["schema_version"] == 1
+    expected_schema = 2 if model_type is TimeframeState else 1
+    assert payload["schema_version"] == expected_schema
     assert model_type.from_dict(payload) == instance  # type: ignore[attr-defined]
 
 
