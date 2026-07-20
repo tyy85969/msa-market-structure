@@ -40,6 +40,9 @@
 - Added research-only periodic-extreme and historical-reaction level generators.
 - Added deterministic C-004 identity/provenance, causal-prefix, As-Of, and replay tests.
 - Added deterministic C-005 Level Pool clustering, dependency-family explanations, immutable formation history, and no-lookahead replay coverage.
+- Added the causal C-006A structure lifecycle event ledger and immutable state snapshots.
+- Added parameterized Test, Weakening, close-only Break, Flip, and Retirement baselines.
+- Added lifecycle Batch, As-Of, replay parity, deterministic serialization, and no-lookahead coverage.
 
 ### Added
 - 初始化 MSA 项目仓库。
