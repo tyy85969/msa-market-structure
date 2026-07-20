@@ -37,6 +37,8 @@
 - Added a causal Decimal SMA-ATR turning-point Swing baseline.
 - Added Pivot-seeded and ATR-seeded close-only structure-confirmation baselines.
 - Added fixed causal-prefix, deterministic identity/provenance, and replay parity coverage for C-003B.
+- Added research-only periodic-extreme and historical-reaction level generators.
+- Added deterministic C-004 identity/provenance, causal-prefix, As-Of, and replay tests.
 
 ### Added
 - 初始化 MSA 项目仓库。
