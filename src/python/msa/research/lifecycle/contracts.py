@@ -1078,6 +1078,274 @@ class LifecycleReport:
             raise LifecycleSerializationError(f"invalid serialized {cls.__name__}: {exc}") from exc
 
 
+def _opposite_effective_mapping(
+    subject_ref: BoundaryRef,
+) -> tuple[BoundarySide, MarketRole]:
+    if (
+        subject_ref.boundary_side is BoundarySide.UPPER
+        and subject_ref.market_role is MarketRole.RESISTANCE
+    ):
+        return BoundarySide.LOWER, MarketRole.SUPPORT
+    if (
+        subject_ref.boundary_side is BoundarySide.LOWER
+        and subject_ref.market_role is MarketRole.SUPPORT
+    ):
+        return BoundarySide.UPPER, MarketRole.RESISTANCE
+    raise LifecycleEngineError("subject_ref has an invalid side/role mapping")
+
+
+def _require_provenance(
+    provenance: ProvenanceRef,
+    *,
+    source_object_id: str,
+    config: LifecycleConfig,
+    required_parents: tuple[str, ...],
+    object_name: str,
+) -> None:
+    if provenance.source_object_id != source_object_id:
+        raise LifecycleEngineError(
+            f"{object_name} provenance source_object_id is inconsistent"
+        )
+    if provenance.policy_id != config.policy_id:
+        raise LifecycleEngineError(f"{object_name} provenance policy_id is inconsistent")
+    if provenance.source_version != config.engine_version:
+        raise LifecycleEngineError(
+            f"{object_name} provenance source_version is inconsistent"
+        )
+    if not set(required_parents).issubset(provenance.parent_object_ids):
+        raise LifecycleEngineError(
+            f"{object_name} provenance is missing required parent IDs"
+        )
+
+
+def _validate_event_progression(
+    event: LifecycleEvent,
+    previous: LifecycleEvent | None,
+    state: LifecycleSubjectState,
+    config: LifecycleConfig,
+) -> None:
+    subject = state.subject_ref
+    if event.subject_id != subject.object_id:
+        raise LifecycleEngineError("event subject_id contradicts state.subject_ref")
+
+    expected_side = subject.boundary_side
+    expected_role = subject.market_role
+    if event.event_type is LifecycleEventType.FLIPPED:
+        expected_side, expected_role = _opposite_effective_mapping(subject)
+    if (
+        event.effective_boundary_side is not expected_side
+        or event.effective_market_role is not expected_role
+    ):
+        raise LifecycleEngineError("event effective side/role contradicts subject_ref")
+
+    if previous is None:
+        if not (
+            event.event_type is LifecycleEventType.ACTIVATED
+            and event.from_state is LifecycleState.CONFIRMED
+            and event.to_state is LifecycleState.FRESH
+            and event.event_origin_time == subject.confirm_time
+            and event.event_confirm_time == subject.confirm_time
+            and event.first_seen_time == subject.confirm_time
+            and event.test_count == 0
+            and event.prior_event_ids == ()
+        ):
+            raise LifecycleEngineError(
+                "subject event ledger must begin with its exact ACTIVATED event"
+            )
+        required_parents = (subject.object_id,)
+    else:
+        if previous.to_state in {LifecycleState.FLIPPED, LifecycleState.RETIRED}:
+            raise LifecycleEngineError("terminal lifecycle event cannot have a successor")
+        if event.event_type is LifecycleEventType.ACTIVATED:
+            raise LifecycleEngineError("subject event ledger may contain only one ACTIVATED event")
+        if event.prior_event_ids != (previous.event_id,):
+            raise LifecycleEngineError(
+                "event prior_event_ids must reference the immediate predecessor"
+            )
+        if event.from_state is not previous.to_state:
+            raise LifecycleEngineError(
+                "event from_state must equal the previous event to_state"
+            )
+        if event.event_confirm_time < previous.event_confirm_time:
+            raise LifecycleEngineError("event ConfirmTime must not move backward")
+        expected_count = previous.test_count + (
+            1
+            if event.event_type
+            in {LifecycleEventType.TEST, LifecycleEventType.WEAKENED}
+            else 0
+        )
+        if event.test_count != expected_count:
+            raise LifecycleEngineError("event test_count progression is inconsistent")
+        required_parents = (subject.object_id, previous.event_id)
+
+        threshold = config.weakening_test_count
+        transition = (event.from_state, event.to_state)
+        if transition == (LifecycleState.FRESH, LifecycleState.TESTED):
+            if event.test_count != 1:
+                raise LifecycleEngineError("first TEST must set test_count to one")
+        elif transition == (LifecycleState.TESTED, LifecycleState.TESTED):
+            if event.test_count >= threshold:
+                raise LifecycleEngineError(
+                    "TESTED cannot persist at the weakening threshold"
+                )
+        elif transition == (LifecycleState.TESTED, LifecycleState.WEAKENED):
+            if event.test_count != threshold:
+                raise LifecycleEngineError(
+                    "WEAKENED must begin exactly at the configured threshold"
+                )
+        elif transition == (LifecycleState.WEAKENED, LifecycleState.WEAKENED):
+            if event.test_count <= threshold:
+                raise LifecycleEngineError(
+                    "subsequent WEAKENED tests must exceed the configured threshold"
+                )
+
+    _require_provenance(
+        event.provenance,
+        source_object_id=event.event_id,
+        config=config,
+        required_parents=required_parents,
+        object_name="event",
+    )
+
+
+def _validate_state_event_facts(
+    state: LifecycleSubjectState,
+    events: tuple[LifecycleEvent, ...],
+    config: LifecycleConfig,
+) -> None:
+    if not events:
+        raise LifecycleEngineError("every lifecycle state requires an event ledger")
+    if state.event_ids != tuple(event.event_id for event in events):
+        raise LifecycleEngineError("state.event_ids must equal the subject event ledger")
+
+    previous: LifecycleEvent | None = None
+    for event in events:
+        _validate_event_progression(event, previous, state, config)
+        previous = event
+
+    last = events[-1]
+    if state.lifecycle_state is not last.to_state:
+        raise LifecycleEngineError("state lifecycle_state must equal the final event to_state")
+    if state.state_confirm_time != last.event_confirm_time:
+        raise LifecycleEngineError(
+            "state_confirm_time must equal the final event ConfirmTime"
+        )
+    if state.test_count != last.test_count:
+        raise LifecycleEngineError("state test_count must equal the final event test_count")
+    if (
+        state.effective_boundary_side is not last.effective_boundary_side
+        or state.effective_market_role is not last.effective_market_role
+    ):
+        raise LifecycleEngineError("state effective side/role must equal the final event")
+
+    test_events = tuple(
+        event
+        for event in events
+        if event.event_type in {LifecycleEventType.TEST, LifecycleEventType.WEAKENED}
+    )
+    if test_events:
+        latest_test = test_events[-1]
+        if (
+            state.last_test_time != latest_test.event_origin_time
+            or state.last_test_confirm_time != latest_test.event_confirm_time
+            or state.last_test_bar_key != latest_test.source_bar_key
+            or state.test_count != latest_test.test_count
+        ):
+            raise LifecycleEngineError("state last-test facts contradict the event ledger")
+    elif (
+        state.test_count != 0
+        or state.last_test_time is not None
+        or state.last_test_confirm_time is not None
+        or state.last_test_bar_key is not None
+    ):
+        raise LifecycleEngineError("state has last-test facts without a test event")
+
+    break_events = tuple(
+        event for event in events if event.event_type is LifecycleEventType.BROKEN
+    )
+    post_break = state.lifecycle_state in {
+        LifecycleState.BROKEN,
+        LifecycleState.FLIPPED,
+        LifecycleState.RETIRED,
+    }
+    if len(break_events) > 1 or post_break != (len(break_events) == 1):
+        raise LifecycleEngineError("state Break facts require exactly one BROKEN event")
+    if break_events:
+        broken = break_events[0]
+        if (
+            state.break_time != broken.event_origin_time
+            or state.break_confirm_time != broken.event_confirm_time
+            or state.break_bar_key != broken.source_bar_key
+            or state.break_close != broken.source_price
+        ):
+            raise LifecycleEngineError("state Break facts contradict the BROKEN event")
+
+    touch_events = tuple(
+        event for event in events if event.event_type is LifecycleEventType.FLIP_TOUCH
+    )
+    has_touch = state.flip_touch_time is not None
+    if len(touch_events) > 1 or has_touch != (len(touch_events) == 1):
+        raise LifecycleEngineError("state flip-touch facts require one FLIP_TOUCH event")
+    if touch_events:
+        touch = touch_events[0]
+        if (
+            state.flip_touch_time != touch.event_origin_time
+            or state.flip_touch_confirm_time != touch.event_confirm_time
+            or state.flip_touch_bar_key != touch.source_bar_key
+        ):
+            raise LifecycleEngineError(
+                "state flip-touch facts contradict the FLIP_TOUCH event"
+            )
+
+    flipped_events = tuple(
+        event for event in events if event.event_type is LifecycleEventType.FLIPPED
+    )
+    is_flipped = state.lifecycle_state is LifecycleState.FLIPPED
+    if len(flipped_events) > 1 or is_flipped != (len(flipped_events) == 1):
+        raise LifecycleEngineError("FLIPPED state requires exactly one FLIPPED event")
+    if flipped_events:
+        flipped = flipped_events[0]
+        if (
+            state.flipped_time != flipped.event_origin_time
+            or state.flipped_confirm_time != flipped.event_confirm_time
+            or state.flip_confirmation_close != flipped.source_price
+        ):
+            raise LifecycleEngineError("state Flip facts contradict the FLIPPED event")
+
+    retired_events = tuple(
+        event for event in events if event.event_type is LifecycleEventType.RETIRED
+    )
+    is_retired = state.lifecycle_state is LifecycleState.RETIRED
+    if len(retired_events) > 1 or is_retired != (len(retired_events) == 1):
+        raise LifecycleEngineError("RETIRED state requires exactly one RETIRED event")
+    if retired_events:
+        retired = retired_events[0]
+        if (
+            state.retired_time != retired.event_origin_time
+            or state.retired_confirm_time != retired.event_confirm_time
+            or state.retirement_reason is not retired.retirement_reason
+        ):
+            raise LifecycleEngineError(
+                "state retirement facts contradict the RETIRED event"
+            )
+    if flipped_events and retired_events:
+        raise LifecycleEngineError("FLIPPED and RETIRED events are mutually exclusive")
+
+    _require_provenance(
+        state.provenance,
+        source_object_id=state.state_id,
+        config=config,
+        required_parents=(state.subject_ref.object_id, last.event_id),
+        object_name="state",
+    )
+
+
+def _state_facts_without_as_of(state: LifecycleSubjectState) -> dict[str, object]:
+    facts = state.to_dict()
+    del facts["as_of_time"]
+    return facts
+
+
 @dataclass(frozen=True, slots=True)
 class LifecycleSnapshot:
     snapshot_id: str
@@ -1107,15 +1375,18 @@ class LifecycleSnapshot:
             raise LifecycleEngineError("events must be uniquely and stably ordered")
         if any(item.event_confirm_time > as_of for item in events):
             raise LifecycleEngineError("event cannot follow snapshot.as_of_time")
-        by_subject = {item.subject_ref.object_id: item for item in states}
-        for subject_id, state in by_subject.items():
-            expected = tuple(item.event_id for item in events if item.subject_id == subject_id)
-            if state.event_ids != expected:
-                raise LifecycleEngineError("state.event_ids must equal the subject event ledger")
-        if {item.subject_id for item in events} - set(by_subject):
-            raise LifecycleEngineError("event references a subject absent from snapshot states")
         if not isinstance(self.report, LifecycleReport) or not isinstance(self.config_snapshot, LifecycleConfig):
             raise LifecycleEngineError("snapshot report/config types are invalid")
+        by_subject = {item.subject_ref.object_id: item for item in states}
+        for subject_id, state in by_subject.items():
+            subject_events = tuple(
+                item for item in events if item.subject_id == subject_id
+            )
+            _validate_state_event_facts(
+                state, subject_events, self.config_snapshot
+            )
+        if {item.subject_id for item in events} - set(by_subject):
+            raise LifecycleEngineError("event references a subject absent from snapshot states")
         if (
             self.report.engine_id != self.config_snapshot.engine_id
             or self.report.engine_version != self.config_snapshot.engine_version
@@ -1201,6 +1472,64 @@ class LifecycleHistory:
             raise LifecycleEngineError("history snapshots must contain LifecycleSnapshot")
         if any(current.as_of_time <= previous.as_of_time for previous, current in zip(self.snapshots, self.snapshots[1:])):
             raise LifecycleEngineError("history snapshots must be strictly chronological")
+        first_config = self.snapshots[0].config_snapshot
+        if any(
+            snapshot.config_snapshot != first_config
+            for snapshot in self.snapshots[1:]
+        ):
+            raise LifecycleEngineError("history snapshot configurations must be identical")
+
+        previous_states: dict[str, LifecycleSubjectState] = {}
+        subject_refs: dict[str, BoundaryRef] = {}
+        for snapshot in self.snapshots:
+            current_states = {
+                state.subject_ref.object_id: state for state in snapshot.states
+            }
+            if not set(previous_states).issubset(current_states):
+                raise LifecycleEngineError(
+                    "a visible history subject cannot disappear"
+                )
+            for subject_id, state in current_states.items():
+                known_ref = subject_refs.get(subject_id)
+                if known_ref is not None and state.subject_ref != known_ref:
+                    raise LifecycleEngineError(
+                        "history subject_ref facts are immutable"
+                    )
+                subject_refs.setdefault(subject_id, state.subject_ref)
+
+                previous = previous_states.get(subject_id)
+                if previous is None:
+                    subject_events = tuple(
+                        event
+                        for event in snapshot.events
+                        if event.subject_id == subject_id
+                    )
+                    if (
+                        not subject_events
+                        or subject_events[0].event_type
+                        is not LifecycleEventType.ACTIVATED
+                        or subject_events[0].event_confirm_time
+                        > snapshot.as_of_time
+                    ):
+                        raise LifecycleEngineError(
+                            "new history subject must appear with its visible ACTIVATED event"
+                        )
+                    continue
+
+                if state.event_ids[:len(previous.event_ids)] != previous.event_ids:
+                    raise LifecycleEngineError(
+                        "later state event IDs must extend the earlier event prefix"
+                    )
+                if (
+                    state.event_ids == previous.event_ids
+                    and _state_facts_without_as_of(state)
+                    != _state_facts_without_as_of(previous)
+                ):
+                    raise LifecycleEngineError(
+                        "state facts cannot change without a new event"
+                    )
+            previous_states = current_states
+
         if not isinstance(self.final_snapshot, LifecycleSnapshot) or self.final_snapshot != self.snapshots[-1]:
             raise LifecycleEngineError("final_snapshot must equal the last history snapshot")
         if self.final_snapshot.events != self.events:

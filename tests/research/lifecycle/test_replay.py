@@ -1,11 +1,17 @@
 from dataclasses import replace
 from datetime import datetime, timedelta
+from decimal import Decimal
 
 import pytest
 
-from msa.research.lifecycle import LifecycleInputError, replay_history
+from msa.domain import PriceRange
+from msa.research.lifecycle import (
+    LifecycleEngineError, LifecycleEventType, LifecycleHistory,
+    LifecycleInputError, replay_history,
+)
 from tests.research.lifecycle.fixtures import (
-    START, T1, T2, T3, T4, bar, engine, lifecycle_input, upper_break_bars,
+    START, T1, T2, T3, T4, T5, bar, config, engine, lifecycle_input,
+    subject, upper_break_bars,
 )
 
 
@@ -75,3 +81,125 @@ def test_same_time_events_are_atomic_and_stably_sorted() -> None:
 def test_origin_time_does_not_grant_replay_visibility() -> None:
     data = lifecycle_input((bar(0),))
     assert engine().build_as_of(data, START).states == ()
+
+
+def test_history_rejects_snapshot_config_change() -> None:
+    history = engine().build_batch(lifecycle_input(upper_break_bars()))
+    changed = replace(
+        history.snapshots[-1],
+        config_snapshot=config(break_buffer=Decimal("2")),
+    )
+    with pytest.raises(LifecycleEngineError, match="configurations"):
+        LifecycleHistory(
+            events=changed.events,
+            snapshots=history.snapshots[:-1] + (changed,),
+            final_snapshot=changed,
+        )
+
+
+def test_history_rejects_subject_disappearance() -> None:
+    first = engine().build_as_of(
+        lifecycle_input((bar(0),), (subject("early"),)), T1
+    )
+    later = engine().build_as_of(
+        lifecycle_input(
+            (bar(0), bar(1)),
+            (subject("late", confirm_time=T2),),
+        ),
+        T2,
+    )
+    with pytest.raises(LifecycleEngineError, match="cannot disappear"):
+        LifecycleHistory(later.events, (first, later), later)
+
+
+def test_history_rejects_subject_ref_replacement_for_same_id() -> None:
+    original = subject("stable")
+    changed_ref = replace(
+        original,
+        price_range=PriceRange(Decimal("110"), Decimal("111")),
+    )
+    first = engine().build_as_of(
+        lifecycle_input((bar(0),), (original,)), T1
+    )
+    later = engine().build_as_of(
+        lifecycle_input((bar(0), bar(1)), (changed_ref,)), T2
+    )
+    with pytest.raises(LifecycleEngineError, match="subject_ref facts are immutable"):
+        LifecycleHistory(later.events, (first, later), later)
+
+
+def test_history_rejects_nonprefix_state_event_ids() -> None:
+    tested = engine().build_as_of(lifecycle_input((
+        bar(0), bar(1, open="100", high="101", low="99", close="100"),
+    )), T2)
+    alternative = engine().build_as_of(lifecycle_input((
+        bar(0), bar(1, open="101", high="103", low="100", close="102"),
+        bar(2, open="103", high="104", low="103", close="103"),
+    )), T3)
+    with pytest.raises(LifecycleEngineError, match="extend the earlier event prefix"):
+        LifecycleHistory(alternative.events, (tested, alternative), alternative)
+
+
+def test_history_rejects_state_fact_change_without_new_event() -> None:
+    data = lifecycle_input((
+        bar(0),
+        bar(1, open="101", high="103", low="100", close="102"),
+        bar(2, open="103", high="104", low="103", close="103"),
+    ))
+    first = engine().build_as_of(data, T2)
+    later = engine().build_as_of(data, T3)
+    assert first.states[0].event_ids == later.states[0].event_ids
+    changed_state = replace(later.states[0], break_threshold=Decimal("999"))
+    changed = replace(later, states=(changed_state,))
+    with pytest.raises(LifecycleEngineError, match="without a new event"):
+        LifecycleHistory(changed.events, (first, changed), changed)
+
+
+def test_history_accepts_subject_activated_in_later_snapshot() -> None:
+    history = engine().build_batch(lifecycle_input(
+        (bar(0), bar(1)),
+        (subject("early"), subject("late", confirm_time=T2)),
+    ))
+    assert [len(snapshot.states) for snapshot in history.snapshots] == [1, 2]
+    assert history.final_snapshot.states[1].subject_ref.object_id == "late"
+
+
+def test_history_accepts_delayed_prefix_same_confirm_time_event_chain() -> None:
+    bars = (
+        replace(bar(0), available_time=T4),
+        bar(1, open="100", high="101", low="99", close="100", available_time=T2),
+        bar(2, open="100", high="101", low="99", close="100", available_time=T3),
+        bar(3, open="100", high="101", low="99", close="100", available_time=T4),
+    )
+    history = engine().build_batch(lifecycle_input(bars))
+    same_time = tuple(
+        event for event in history.events if event.event_confirm_time == T4
+    )
+    assert tuple(event.event_type for event in same_time) == (
+        LifecycleEventType.TEST,
+        LifecycleEventType.WEAKENED,
+        LifecycleEventType.TEST,
+    )
+
+
+def test_history_accepts_flip_touch_and_horizon_retirement_on_same_bar() -> None:
+    bars = (
+        bar(0),
+        bar(1, open="101", high="103", low="100", close="102"),
+        bar(2, open="103", high="104", low="103", close="103"),
+        bar(3, open="103", high="104", low="103", close="103"),
+        bar(4, open="101", high="102", low="100", close="101"),
+    )
+    history = engine().build_batch(lifecycle_input(bars))
+    assert tuple(event.event_type for event in history.events[-2:]) == (
+        LifecycleEventType.FLIP_TOUCH,
+        LifecycleEventType.RETIRED,
+    )
+    assert history.events[-2].event_confirm_time == T5
+    assert history.events[-1].event_confirm_time == T5
+
+
+def test_history_accepts_complete_flipped_ledger() -> None:
+    history = engine().build_batch(lifecycle_input(upper_break_bars()))
+    assert history.events[-1].event_type is LifecycleEventType.FLIPPED
+    assert history.final_snapshot == history.snapshots[-1]

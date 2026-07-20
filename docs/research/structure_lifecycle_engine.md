@@ -16,9 +16,13 @@ A C-005 cluster ID freezes its formation members and ConfirmTime. Later tests, b
 
 The supported event types are `ACTIVATED`, `TEST`, `WEAKENED`, `BROKEN`, `FLIP_TOUCH`, `FLIPPED`, and `RETIRED`. Every state change has an event; state-preserving TEST and FLIP_TOUCH events also remain explicit. Events are globally ordered by `(event_confirm_time, subject_id, event_id)`.
 
+Within that global order, each subject owns one continuous event chain. The chain begins with exactly one `ACTIVATED` event at the subject ConfirmTime. Every later event names the immediate predecessor in `prior_event_ids`, starts from the predecessor's `to_state`, and cannot move ConfirmTime backward. Test counts advance by exactly one only for TEST or WEAKENED events. No event may follow FLIPPED or RETIRED. Event provenance identifies the event itself and contains the subject plus the immediate predecessor when one exists.
+
 ## 5. LifecycleSubjectState
 
 Each state preserves the original subject, structural OriginTime and ConfirmTime, current state ConfirmTime, AsOfTime, effective side and role, test count, break/flip/retirement facts, ordered event IDs, deterministic state ID, and bounded provenance. `RETIRED` keeps history; it does not delete the subject.
+
+The state is a verifiable derived view of its complete event prefix, not an independent mutable claim. Its lifecycle state, state ConfirmTime, test count, effective side/role, latest-test fields, and break/flip/retirement facts must match the corresponding ledger events exactly. State provenance identifies the state and contains both the original subject ID and the latest event ID.
 
 ## 6. CONFIRMED to FRESH
 
@@ -92,6 +96,8 @@ Event provenance references the original subject and at most the immediate prior
 
 Batch advances over the sorted unique union of subject ConfirmTimes and source bar available times. Subjects or bars sharing a time are evaluated in one As-Of snapshot, which makes simultaneous activation atomic.
 
+All snapshots in one history use the same configuration. Visible subject IDs are monotonic: once a subject appears, it cannot disappear, and its original `BoundaryRef` cannot change under the same object ID. Each later state event list extends the earlier list as a prefix. When no new event exists, every state fact except AsOfTime must remain identical.
+
 ## 24. As-Of
 
 As-Of requires an aware processing time and returns immutable visible states, the complete event prefix, configuration, and a bounded report. The full immutable input is validated fail-closed before causal filtering.
@@ -99,6 +105,8 @@ As-Of requires an aware processing time and returns immutable visible states, th
 ## 25. Replay
 
 Default replay uses the same Batch schedule. An explicit schedule must be aware, strictly increasing, unique, and include every true Event first-seen time. Sparse late discovery cannot masquerade as causal first appearance.
+
+Ledger, state, provenance, and history-coherence checks are public C-006A contract validation. They do not infer trend direction, rebuild price decisions, or introduce C-006B `TimeframeState` behavior.
 
 ## 26. No-Lookahead guarantees
 
