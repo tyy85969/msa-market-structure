@@ -3,7 +3,8 @@ from datetime import timedelta
 
 import pytest
 
-from msa.domain import Direction
+from msa.data import Timeframe
+from msa.domain import BoundarySide, Direction
 from msa.research.timeframe_state import (
     TimeframeStateEngineError,
     TimeframeStateHistory,
@@ -11,9 +12,11 @@ from msa.research.timeframe_state import (
 from tests.research.timeframe_state.fixtures import (
     START,
     T1,
+    T2,
     base_pair,
     bar,
     direction_sequence_input,
+    subject,
     timeframe_engine,
     timeframe_input,
 )
@@ -98,3 +101,47 @@ def test_history_retains_old_immutable_snapshots() -> None:
     first_payload = history.snapshots[0].to_dict()
     assert history.snapshots[0].state.direction is Direction.UNKNOWN
     assert history.snapshots[0].to_dict() == first_payload
+
+
+def test_no_change_lifecycle_snapshot_may_follow_forming_event_source() -> None:
+    other_context = subject(
+        "other-timeframe",
+        BoundarySide.UPPER,
+        "110",
+        "111",
+        timeframe=Timeframe.H2,
+    )
+    history = timeframe_engine().build_batch(
+        timeframe_input((other_context,), (bar(0), bar(1)))
+    )
+    initial = history.snapshots[0]
+    observed = history.final_snapshot
+    assert observed.source_lifecycle_snapshot_id != initial.source_lifecycle_snapshot_id
+    assert observed.events == initial.events
+    assert observed.state.state_id == initial.state.state_id
+    assert observed.events[-1].source_lifecycle_snapshot_id == (
+        initial.source_lifecycle_snapshot_id
+    )
+    assert observed.events[-1].event_confirm_time < observed.as_of_time
+
+
+def test_extra_as_of_keeps_latest_lifecycle_source_and_earlier_forming_event() -> None:
+    other_context = subject(
+        "other-timeframe",
+        BoundarySide.UPPER,
+        "110",
+        "111",
+        timeframe=Timeframe.H2,
+    )
+    data = timeframe_input((other_context,), (bar(0), bar(1)))
+    batch = timeframe_engine().build_batch(data)
+    observed = timeframe_engine().build_as_of(data, T2 + timedelta(minutes=30))
+    assert observed.source_lifecycle_snapshot_id == (
+        batch.final_snapshot.source_lifecycle_snapshot_id
+    )
+    assert observed.events == batch.events
+    assert observed.state.state_id == batch.final_snapshot.state.state_id
+    assert observed.events[-1].source_lifecycle_snapshot_id != (
+        observed.source_lifecycle_snapshot_id
+    )
+    assert observed.events[-1].event_confirm_time < observed.as_of_time

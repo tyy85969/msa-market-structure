@@ -1292,16 +1292,31 @@ def _boundary_payload(boundary: object) -> object:
     return None if boundary is None else boundary.to_dict()  # type: ignore[attr-defined]
 
 
-def _expected_state_id(state: TimeframeState) -> str:
+def _expected_state_id(
+    state: TimeframeState, config: TimeframeStateConfig
+) -> str:
     try:
+        notes_engine_id = _engine_id_from_notes(state.provenance.notes)
+        if notes_engine_id != config.engine_id:
+            raise TimeframeStateEngineError(
+                "state provenance engine_id contradicts snapshot config"
+            )
+        if state.provenance.source_version != config.engine_version:
+            raise TimeframeStateEngineError(
+                "state provenance version contradicts snapshot config"
+            )
+        if state.provenance.policy_id != config.policy_id:
+            raise TimeframeStateEngineError(
+                "state provenance policy contradicts snapshot config"
+            )
         return _state_id(
-            engine_id=_engine_id_from_notes(state.provenance.notes),
-            engine_version=state.state_version,
-            policy_id=state.provenance.policy_id,
-            symbol=state.symbol,
-            target_timeframe=state.timeframe.value,
-            target_scale=state.scale.to_dict(),
-            selection_policy=TimeframeSelectionPolicy.LATEST_CAUSAL.value,
+            engine_id=config.engine_id,
+            engine_version=config.engine_version,
+            policy_id=config.policy_id,
+            symbol=config.symbol,
+            target_timeframe=config.target_timeframe.value,
+            target_scale=config.target_scale.to_dict(),
+            selection_policy=config.selection_policy.value,
             direction=state.direction.value,
             candidate_upper_boundary=_boundary_payload(
                 state.candidate_upper_boundary
@@ -1324,6 +1339,49 @@ def _expected_state_id(state: TimeframeState) -> str:
     except (TypeError, ValueError) as exc:
         raise TimeframeStateEngineError(
             f"state identity inputs are invalid: {exc}"
+        ) from exc
+
+
+def _expected_event_id(
+    event: TimeframeStateEvent, config: TimeframeStateConfig
+) -> str:
+    try:
+        notes_engine_id = _engine_id_from_notes(event.provenance.notes)
+        if notes_engine_id != config.engine_id:
+            raise TimeframeStateEngineError(
+                "event provenance engine_id contradicts snapshot config"
+            )
+        if event.provenance.source_version != config.engine_version:
+            raise TimeframeStateEngineError(
+                "event provenance version contradicts snapshot config"
+            )
+        if event.provenance.policy_id != config.policy_id:
+            raise TimeframeStateEngineError(
+                "event provenance policy contradicts snapshot config"
+            )
+        return _event_id(
+            engine_id=config.engine_id,
+            engine_version=config.engine_version,
+            policy_id=config.policy_id,
+            previous_state_id=event.previous_state_id,
+            current_state_id=event.current_state_id,
+            event_type=event.event_type.value,
+            event_confirm_time=event.event_confirm_time,
+            previous_direction=(
+                None
+                if event.previous_direction is None
+                else event.previous_direction.value
+            ),
+            current_direction=event.current_direction.value,
+            changed_fields=event.changed_fields,
+            source_lifecycle_snapshot_id=event.source_lifecycle_snapshot_id,
+            source_lifecycle_event_ids=event.source_lifecycle_event_ids,
+            prior_event_id=event.prior_event_id,
+            schema_version=event.schema_version,
+        )
+    except (TypeError, ValueError) as exc:
+        raise TimeframeStateEngineError(
+            f"event identity inputs are invalid: {exc}"
         ) from exc
 
 
@@ -1475,6 +1533,35 @@ def _validate_current_confirmed_pair(
             )
 
 
+def _validate_snapshot_config_context(
+    state: TimeframeState,
+    explanation: BoundarySelectionExplanation,
+    report: TimeframeStateReport,
+    config: TimeframeStateConfig,
+) -> None:
+    if (
+        explanation.target_symbol != config.symbol
+        or explanation.target_timeframe is not config.target_timeframe
+        or explanation.target_scale != config.target_scale
+        or explanation.selection_policy is not config.selection_policy
+    ):
+        raise TimeframeStateEngineError("explanation target contradicts config")
+    if state.state_version != config.engine_version:
+        raise TimeframeStateEngineError("state_version must equal config.engine_version")
+    if (
+        state.symbol != config.symbol
+        or state.timeframe is not config.target_timeframe
+        or state.scale != config.target_scale
+    ):
+        raise TimeframeStateEngineError("state target context contradicts config")
+    if (
+        report.engine_id != config.engine_id
+        or report.engine_version != config.engine_version
+        or report.policy_id != config.policy_id
+    ):
+        raise TimeframeStateEngineError("report engine identity contradicts config")
+
+
 def _validate_snapshot_views(
     state: TimeframeState,
     explanation: BoundarySelectionExplanation,
@@ -1483,14 +1570,33 @@ def _validate_snapshot_views(
     events: tuple[TimeframeStateEvent, ...],
     source_lifecycle_snapshot_id: str,
 ) -> None:
-    del source_lifecycle_snapshot_id
+    _validate_snapshot_config_context(state, explanation, report, config)
+    for event in events:
+        if event.event_id != _expected_event_id(event, config):
+            raise TimeframeStateEngineError(
+                "event_id does not match the snapshot-config identity"
+            )
+    if state.state_id != _expected_state_id(state, config):
+        raise TimeframeStateEngineError(
+            "state_id does not match the snapshot-config identity"
+        )
+    latest = events[-1]
     if (
-        explanation.target_symbol != config.symbol
-        or explanation.target_timeframe is not config.target_timeframe
-        or explanation.target_scale != config.target_scale
-        or explanation.selection_policy is not config.selection_policy
+        state.origin_time != latest.event_confirm_time
+        or state.confirm_time != latest.event_confirm_time
     ):
-        raise TimeframeStateEngineError("explanation target contradicts config")
+        raise TimeframeStateEngineError(
+            "state OriginTime and ConfirmTime must equal the last event time"
+        )
+    if latest.event_confirm_time == state.as_of_time:
+        if latest.source_lifecycle_snapshot_id != source_lifecycle_snapshot_id:
+            raise TimeframeStateEngineError(
+                "forming event source lifecycle snapshot contradicts snapshot source"
+            )
+        if source_lifecycle_snapshot_id not in state.provenance.parent_object_ids:
+            raise TimeframeStateEngineError(
+                "state provenance must contain the forming snapshot source"
+            )
     selected = (
         explanation.selected_candidate_upper_id,
         explanation.selected_candidate_lower_id,
@@ -1507,18 +1613,6 @@ def _validate_snapshot_views(
         raise TimeframeStateEngineError("explanation selected boundaries contradict state")
     if explanation.final_direction is not state.direction:
         raise TimeframeStateEngineError("explanation final direction contradicts state")
-    if state.state_id != _expected_state_id(state):
-        raise TimeframeStateEngineError(
-            "state_id does not match the recomputed semantic identity"
-        )
-    latest = events[-1]
-    if (
-        state.origin_time != latest.event_confirm_time
-        or state.confirm_time != latest.event_confirm_time
-    ):
-        raise TimeframeStateEngineError(
-            "state OriginTime and ConfirmTime must equal the last event time"
-        )
     _validate_crossing_view(explanation, "candidate")
     _validate_crossing_view(explanation, "confirmed")
     _validate_raw_selection_ids(state, explanation, "candidate")
@@ -1600,20 +1694,6 @@ def _validate_snapshot_views(
         raise TimeframeStateEngineError("report crossing facts contradict explanation")
     if report.state_event_count != len(events):
         raise TimeframeStateEngineError("report state_event_count contradicts events")
-    if (
-        report.engine_id != config.engine_id
-        or report.engine_version != config.engine_version
-        or report.policy_id != config.policy_id
-    ):
-        raise TimeframeStateEngineError("report engine identity contradicts config")
-    if state.state_version != config.engine_version:
-        raise TimeframeStateEngineError("state_version must equal config.engine_version")
-    if (
-        state.symbol != config.symbol
-        or state.timeframe is not config.target_timeframe
-        or state.scale != config.target_scale
-    ):
-        raise TimeframeStateEngineError("state target context contradicts config")
     if (
         report.upper_candidate_count + report.lower_candidate_count
         != report.candidate_eligible_count
@@ -1732,6 +1812,22 @@ class TimeframeStateSnapshot:
             raise TimeframeStateEngineError("snapshot state must be a TimeframeState")
         if self.state.as_of_time != as_of or self.state.confirm_time > as_of:
             raise TimeframeStateEngineError("snapshot state causal times are inconsistent")
+        if not isinstance(self.explanation, BoundarySelectionExplanation):
+            raise TimeframeStateEngineError(
+                "snapshot explanation must be BoundarySelectionExplanation"
+            )
+        if not isinstance(self.report, TimeframeStateReport):
+            raise TimeframeStateEngineError("snapshot report must be TimeframeStateReport")
+        if not isinstance(self.config_snapshot, TimeframeStateConfig):
+            raise TimeframeStateEngineError(
+                "snapshot config_snapshot must be TimeframeStateConfig"
+            )
+        _validate_snapshot_config_context(
+            self.state,
+            self.explanation,
+            self.report,
+            self.config_snapshot,
+        )
         boundaries = (
             self.state.candidate_upper_boundary,
             self.state.candidate_lower_boundary,
@@ -1752,16 +1848,6 @@ class TimeframeStateSnapshot:
         if self.state.state_id != self.events[-1].current_state_id:
             raise TimeframeStateEngineError(
                 "snapshot state_id must equal the last event current_state_id"
-            )
-        if not isinstance(self.explanation, BoundarySelectionExplanation):
-            raise TimeframeStateEngineError(
-                "snapshot explanation must be BoundarySelectionExplanation"
-            )
-        if not isinstance(self.report, TimeframeStateReport):
-            raise TimeframeStateEngineError("snapshot report must be TimeframeStateReport")
-        if not isinstance(self.config_snapshot, TimeframeStateConfig):
-            raise TimeframeStateEngineError(
-                "snapshot config_snapshot must be TimeframeStateConfig"
             )
         if self.report.as_of_time != as_of:
             raise TimeframeStateEngineError("report.as_of_time must equal snapshot.as_of_time")

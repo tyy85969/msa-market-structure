@@ -235,6 +235,13 @@ replays adjacent six-field semantic diffs and the Direction transition, permits
 zero or one new event per snapshot, and rejects coherent-looking substituted
 hashes or ledgers.
 
+Snapshot validation binds State and every Event identity to the authoritative
+`config_snapshot`. Provenance notes must contain the same `engine_id`, and
+provenance version and policy must equal the configured engine version and
+policy. Re-signing State, Event, and Snapshot hashes under a different but
+internally coherent engine identity therefore fails closed. Normal identity
+payload fields and generated IDs are unchanged.
+
 ## 32. As-Of
 
 `build_as_of(data, processing_time)` requires an aware time no earlier than the
@@ -242,6 +249,14 @@ first lifecycle snapshot. It consumes only the latest lifecycle prefix whose
 `as_of_time <= processing_time`. Between lifecycle snapshots, semantic state,
 ID, OriginTime, ConfirmTime, event ledger, and provenance remain unchanged;
 only AsOfTime and observational snapshot/report identity advance.
+
+When the latest timeframe Event is formed at the current Snapshot AsOfTime, its
+source LifecycleSnapshot ID must equal the Snapshot source ID, and State
+provenance must retain that forming source. A later LifecycleSnapshot with no
+semantic change may have a newer Snapshot source ID while State provenance and
+the latest Event continue to reference the earlier forming source. Explicit
+extra AsOf observations follow the same rule and retain the most recent
+consumed LifecycleSnapshot source.
 
 ## 33. Batch
 

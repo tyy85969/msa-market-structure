@@ -1,16 +1,24 @@
 from dataclasses import FrozenInstanceError, fields, replace
+from datetime import datetime
 
 import pytest
 
+from msa.domain import TimeframeState
 from msa.research.timeframe_state import (
     BoundarySelectionExplanation,
     BoundarySelectionKey,
     TimeframeStateEvent,
+    TimeframeStateConfig,
     TimeframeStateHistory,
     TimeframeStateEngineError,
     TimeframeStateReport,
     TimeframeStateSerializationError,
     TimeframeStateSnapshot,
+)
+from msa.research.timeframe_state.identity import (
+    _event_id,
+    _snapshot_id,
+    _state_id,
 )
 from tests.research.timeframe_state.fixtures import (
     base_pair,
@@ -31,6 +39,108 @@ def public_objects():
         snapshot.report,
         snapshot,
         history,
+    )
+
+
+def _replace_engine_note(notes: list[str], engine_id: str) -> list[str]:
+    return [
+        f"engine_id={engine_id}" if item.startswith("engine_id=") else item
+        for item in notes
+    ]
+
+
+def _resign_payload(
+    payload: dict[str, object],
+    *,
+    state_engine_id: str | None = None,
+    event_engine_id: str | None = None,
+    snapshot_source_id: str | None = None,
+) -> dict[str, object]:
+    config = payload["config_snapshot"]
+    state = payload["state"]
+    event = payload["events"][-1]
+    old_event_id = event["event_id"]
+    if state_engine_id is not None:
+        state["provenance"]["notes"] = _replace_engine_note(
+            state["provenance"]["notes"], state_engine_id
+        )
+        state["state_id"] = _state_id(
+            engine_id=state_engine_id,
+            engine_version=config["engine_version"],
+            policy_id=config["policy_id"],
+            symbol=config["symbol"],
+            target_timeframe=config["target_timeframe"],
+            target_scale=config["target_scale"],
+            selection_policy=config["selection_policy"],
+            direction=state["direction"],
+            candidate_upper_boundary=state["candidate_upper_boundary"],
+            candidate_lower_boundary=state["candidate_lower_boundary"],
+            confirmed_upper_boundary=state["confirmed_upper_boundary"],
+            confirmed_lower_boundary=state["confirmed_lower_boundary"],
+            forming_candidate_ids=state["forming_candidate_ids"],
+            origin_time=datetime.fromisoformat(state["origin_time"]),
+            confirm_time=datetime.fromisoformat(state["confirm_time"]),
+            domain_schema_version=state["schema_version"],
+            engine_schema_version=payload["schema_version"],
+        )
+        state["provenance"]["source_object_id"] = state["state_id"]
+        event["current_state_id"] = state["state_id"]
+    identity_engine_id = event_engine_id or config["engine_id"]
+    if event_engine_id is not None:
+        event["provenance"]["notes"] = _replace_engine_note(
+            event["provenance"]["notes"], event_engine_id
+        )
+    event["event_id"] = _event_id(
+        engine_id=identity_engine_id,
+        engine_version=config["engine_version"],
+        policy_id=config["policy_id"],
+        previous_state_id=event["previous_state_id"],
+        current_state_id=event["current_state_id"],
+        event_type=event["event_type"],
+        event_confirm_time=datetime.fromisoformat(event["event_confirm_time"]),
+        previous_direction=event["previous_direction"],
+        current_direction=event["current_direction"],
+        changed_fields=event["changed_fields"],
+        source_lifecycle_snapshot_id=event["source_lifecycle_snapshot_id"],
+        source_lifecycle_event_ids=event["source_lifecycle_event_ids"],
+        prior_event_id=event["prior_event_id"],
+        schema_version=event["schema_version"],
+    )
+    event["provenance"]["source_object_id"] = event["event_id"]
+    state["provenance"]["parent_object_ids"] = [
+        event["event_id"] if item == old_event_id else item
+        for item in state["provenance"]["parent_object_ids"]
+    ]
+    if snapshot_source_id is not None:
+        payload["source_lifecycle_snapshot_id"] = snapshot_source_id
+    payload["snapshot_id"] = _snapshot_id(
+        config=config,
+        source_lifecycle_snapshot_id=payload["source_lifecycle_snapshot_id"],
+        as_of_time=datetime.fromisoformat(payload["as_of_time"]),
+        state=state,
+        explanation=payload["explanation"],
+        events=payload["events"],
+        report=payload["report"],
+        schema_version=payload["schema_version"],
+    )
+    return payload
+
+
+def _construct_snapshot(payload: dict[str, object]) -> TimeframeStateSnapshot:
+    return TimeframeStateSnapshot(
+        snapshot_id=payload["snapshot_id"],
+        as_of_time=datetime.fromisoformat(payload["as_of_time"]),
+        source_lifecycle_snapshot_id=payload["source_lifecycle_snapshot_id"],
+        state=TimeframeState.from_dict(payload["state"]),
+        explanation=BoundarySelectionExplanation.from_dict(payload["explanation"]),
+        events=tuple(
+            TimeframeStateEvent.from_dict(item) for item in payload["events"]
+        ),
+        report=TimeframeStateReport.from_dict(payload["report"]),
+        config_snapshot=TimeframeStateConfig.from_dict(
+            payload["config_snapshot"]
+        ),
+        schema_version=payload["schema_version"],
     )
 
 
@@ -185,4 +295,75 @@ def test_serialized_extra_provenance_parent_fails_closed(target: str) -> None:
     item = payload["state"] if target == "state" else payload["events"][-1]
     item["provenance"]["parent_object_ids"].append("forged-extra-parent")
     with pytest.raises(TimeframeStateSerializationError, match="provenance"):
+        TimeframeStateSnapshot.from_dict(payload)
+
+
+@pytest.mark.parametrize(
+    ("state_engine_id", "event_engine_id"),
+    [
+        ("forged-state-engine", None),
+        (None, "forged-event-engine"),
+        ("forged-engine", "forged-engine"),
+    ],
+)
+def test_fully_resigned_engine_identity_attack_fails_against_snapshot_config(
+    state_engine_id: str | None, event_engine_id: str | None
+) -> None:
+    snapshot = timeframe_engine().build_batch(
+        timeframe_input(base_pair(), (bar(0),))
+    ).snapshots[0]
+    payload = _resign_payload(
+        snapshot.to_dict(),
+        state_engine_id=state_engine_id,
+        event_engine_id=event_engine_id,
+    )
+    with pytest.raises(TimeframeStateEngineError, match="snapshot config"):
+        _construct_snapshot(payload)
+
+
+@pytest.mark.parametrize(
+    ("state_engine_id", "event_engine_id"),
+    [
+        ("forged-state-engine", None),
+        (None, "forged-event-engine"),
+        ("forged-engine", "forged-engine"),
+    ],
+)
+def test_serialized_fully_resigned_engine_identity_attack_fails_closed(
+    state_engine_id: str | None, event_engine_id: str | None
+) -> None:
+    snapshot = timeframe_engine().build_batch(
+        timeframe_input(base_pair(), (bar(0),))
+    ).snapshots[0]
+    payload = _resign_payload(
+        snapshot.to_dict(),
+        state_engine_id=state_engine_id,
+        event_engine_id=event_engine_id,
+    )
+    with pytest.raises(TimeframeStateSerializationError, match="snapshot config"):
+        TimeframeStateSnapshot.from_dict(payload)
+
+
+@pytest.mark.parametrize("snapshot_index", [0, -1])
+def test_semantic_snapshot_rejects_resigned_source_mismatch(
+    snapshot_index: int,
+) -> None:
+    snapshot = timeframe_engine().build_batch(
+        direction_sequence_input()
+    ).snapshots[snapshot_index]
+    payload = _resign_payload(
+        snapshot.to_dict(), snapshot_source_id="forged-lifecycle-snapshot"
+    )
+    with pytest.raises(TimeframeStateEngineError, match="snapshot source"):
+        _construct_snapshot(payload)
+
+
+def test_serialized_initialized_snapshot_source_mismatch_fails_closed() -> None:
+    snapshot = timeframe_engine().build_batch(
+        direction_sequence_input()
+    ).snapshots[0]
+    payload = _resign_payload(
+        snapshot.to_dict(), snapshot_source_id="forged-lifecycle-snapshot"
+    )
+    with pytest.raises(TimeframeStateSerializationError, match="snapshot source"):
         TimeframeStateSnapshot.from_dict(payload)
