@@ -83,7 +83,12 @@ recomputed from the complete decision payload.
 
 Projection extracts exactly the Zone's evidence from the current source Frame,
 uses every corresponding complete `BoundaryRef`, verifies the Zone envelope,
-and constructs a deterministic `StructureCluster`.
+and constructs a deterministic `StructureCluster`. The contract independently
+recomputes canonical members, member IDs, envelope, earliest OriginTime,
+selection ConfirmTime, side/role, lifecycle, family, output context,
+provenance, and Cluster ID. A projection is authoritative only when it exactly
+equals a fresh projection of the uniquely matching key and snapshot in that
+same ScoreFrame.
 
 ## 15. Projection provenance
 
@@ -117,12 +122,17 @@ across later observations and freezing.
 
 For an ACTIVE Frame, current reference price must remain between the lower and
 upper inner boundary edges, inclusively. ACTIVE ConfirmTime is creation time;
-AsOf may advance.
+AsOf advances by exact current ScoreFrame observations and must equal the
+current ScoreFrame AsOf. Observation requires both stable keys and their
+caller-supplied snapshot IDs to equal the authoritative current Zones.
 
 ## 21. FROZEN history
 
 FROZEN is a terminal historical structural snapshot. Freeze, ConfirmTime, and
 AsOf are the causal freeze time. Later prices need not remain inside the Box.
+Freeze time cannot precede the last ACTIVE AsOf, and freezing preserves the
+episode key, projections, creation time, original selection price, and last
+observed Zone facts exactly.
 
 ## 22. Pair creation
 
@@ -147,7 +157,9 @@ ScoreFrame. C-007C adds no special future-price path.
 ## 26. Event ledger
 
 Only `CREATED` and `FROZEN` exist. IDs bind exact previous/resulting snapshots.
-Replacement order is always FROZEN old then CREATED new.
+Replacement order is always FROZEN old then CREATED new. Every Box appearing
+in a Frame, event snapshot, or frozen ledger has exactly one prior CREATED and
+at most one later FROZEN; a frozen key cannot become ACTIVE again.
 
 ## 27. SelectionFrame
 
@@ -160,7 +172,11 @@ provenance. Every identity and nested decision is recomputed.
 History is a validator, not a builder engine. Frames are strictly increasing
 and map exactly to the immutable ScoreHistory. Each episode has one CREATED and
 at most one FROZEN, never reactivates, and frozen snapshots exactly match the
-event ledger.
+event ledger. Validation carries the previous ACTIVE snapshot across Frames:
+Decision current keys must equal that snapshot; an unchanged pair must equal
+the formal observation result; an unavailable pair must formally freeze it;
+and a changed pair must atomically freeze it before creating a distinct,
+current-ScoreFrame-authoritative episode.
 
 ## 29. No-Lookahead
 

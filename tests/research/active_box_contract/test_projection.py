@@ -1,11 +1,13 @@
-from dataclasses import replace
+from copy import deepcopy
 from decimal import Decimal
 
 import pytest
 
 from msa.data import Timeframe
-from msa.domain import BoundarySide, LifecycleState, MarketRole, StructureObjectKind, StructureSourceType
+from msa.domain import BoundarySide, LifecycleState, MarketRole, StructureCluster, StructureObjectKind, StructureSourceType
 from msa.research.active_box import ActiveBoxProjectionError, ActiveBoxZoneProjection, project_zone
+from msa.research.active_box.identity import cluster_identity_payload, semantic_id
+from msa.research.active_box.projection import validate_zone_projection
 from msa.research.resonance import ResonanceScorer
 from tests.research.resonance.fixtures import H4_PRIMARY, H12_MACRO, MACRO, START, bar, custom_bundle, subject
 from tests.research.resonance_scoring.fixtures import scoring_config
@@ -60,3 +62,72 @@ def test_projection_round_trip_and_arbitrary_identity_rejected() -> None:
     assert ActiveBoxZoneProjection.from_dict(value.to_dict())==value
     payload=value.to_dict(); payload["projection_id"]="active-box-projection-v1-"+"0"*64; payload["provenance"]["source_object_id"]=payload["projection_id"]
     with pytest.raises(Exception,match="projection_id"): ActiveBoxZoneProjection.from_dict(payload)
+
+
+def _resign_projection(payload, *, recompute_cluster: bool = True):
+    payload=deepcopy(payload)
+    parents=sorted(set((payload["source_score_frame_id"],payload["source_zone_snapshot_id"],
+        *payload["member_evidence_ids"],*payload["member_boundary_ids"])))
+    payload["cluster"]["provenance"]["parent_object_ids"]=parents
+    payload["provenance"]["parent_object_ids"]=parents
+    cluster=StructureCluster.from_dict(payload["cluster"])
+    if recompute_cluster:
+        cluster_id=semantic_id("active-box-zone-cluster-v1-",cluster_identity_payload(
+            config=config(),source_score_frame_id=payload["source_score_frame_id"],source_zone_key_id=payload["source_zone_key_id"],
+            source_zone_snapshot_id=payload["source_zone_snapshot_id"],selection_confirm_time=cluster.confirm_time,symbol=cluster.symbol,
+            timeframe=cluster.timeframe,scale=cluster.scale,price_range=cluster.price_range,boundary_side=cluster.boundary_side,
+            market_role=cluster.market_role,lifecycle_state=cluster.lifecycle_state,origin_time=cluster.origin_time,member_refs=cluster.member_refs,
+            cluster_family=cluster.cluster_family,schema_version=1))
+        payload["cluster"]["cluster_id"]=cluster_id
+    payload["cluster"]["provenance"]["source_object_id"]=payload["cluster"]["cluster_id"]
+    cluster=StructureCluster.from_dict(payload["cluster"])
+    payload["boundary"]=cluster.to_boundary_ref().to_dict()
+    identity={"config":payload["config_snapshot"],"source_score_frame_id":payload["source_score_frame_id"],"source_zone_key_id":payload["source_zone_key_id"],
+        "source_zone_snapshot_id":payload["source_zone_snapshot_id"],"selection_confirm_time":payload["selection_confirm_time"],"cluster":payload["cluster"],
+        "boundary":payload["boundary"],"member_evidence_ids":payload["member_evidence_ids"],"member_boundary_ids":payload["member_boundary_ids"],"schema_version":1}
+    payload["projection_id"]=semantic_id("active-box-projection-v1-",identity)
+    payload["provenance"]["source_object_id"]=payload["projection_id"]
+    return payload
+
+
+def test_fully_resigned_arbitrary_cluster_id_is_rejected() -> None:
+    payload=initial_frame().active_box_snapshot.upper_projection.to_dict()
+    payload["cluster"]["cluster_id"]="active-box-zone-cluster-v1-"+"a"*64
+    payload=_resign_projection(payload,recompute_cluster=False)
+    with pytest.raises(Exception,match="cluster_id"): ActiveBoxZoneProjection.from_dict(payload)
+
+
+@pytest.mark.parametrize(("field","value","message"),[
+    ("cluster_family","active-box-zone-v1:wrong","family"),
+    ("market_role","SUPPORT","role"),
+])
+def test_fully_resigned_cluster_semantic_attacks_are_rejected(field,value,message) -> None:
+    payload=initial_frame().active_box_snapshot.upper_projection.to_dict(); payload["cluster"][field]=value
+    payload=_resign_projection(payload)
+    with pytest.raises(Exception,match=message): ActiveBoxZoneProjection.from_dict(payload)
+
+
+def test_fully_resigned_wrong_envelope_is_rejected() -> None:
+    payload=initial_frame().active_box_snapshot.upper_projection.to_dict(); payload["cluster"]["price_range"]["high"]="999"
+    payload=_resign_projection(payload)
+    with pytest.raises(Exception,match="envelope"): ActiveBoxZoneProjection.from_dict(payload)
+
+
+def test_same_zone_key_wrong_snapshot_and_other_frame_projection_are_rejected() -> None:
+    current=score_frame(); projection=initial_frame().active_box_snapshot.upper_projection
+    payload=projection.to_dict(); payload["source_zone_snapshot_id"]="wrong"; payload=_resign_projection(payload)
+    forged=ActiveBoxZoneProjection.from_dict(payload)
+    with pytest.raises(ActiveBoxProjectionError): validate_zone_projection(current,config(),forged)
+    other=ResonanceScorer(scoring_config(candidate_tier_weight=Decimal("0.6"))).score_frame(current.source_frame)
+    assert other.as_of_time==current.as_of_time and other.score_frame_id!=current.score_frame_id
+    with pytest.raises(ActiveBoxProjectionError): validate_zone_projection(other,config(),projection)
+
+
+def test_fully_resigned_member_identity_attack_is_not_authoritative() -> None:
+    current=score_frame(); payload=initial_frame().active_box_snapshot.upper_projection.to_dict()
+    payload["cluster"]["member_refs"][0]["object_id"]="forged-member"
+    payload["member_boundary_ids"][0]="forged-member"
+    payload["member_boundary_ids"]=sorted(payload["member_boundary_ids"])
+    payload["cluster"]["member_refs"]=sorted(payload["cluster"]["member_refs"],key=lambda item:item["object_id"])
+    forged=ActiveBoxZoneProjection.from_dict(_resign_projection(payload))
+    with pytest.raises(ActiveBoxProjectionError): validate_zone_projection(current,config(),forged)

@@ -33,7 +33,7 @@ from .errors import (
     ActiveBoxContractError,
     ActiveBoxSerializationError,
 )
-from .identity import require_semantic_id, semantic_id
+from .identity import cluster_identity_payload, require_semantic_id, semantic_id
 
 
 SCHEMA_VERSION = 1
@@ -534,7 +534,7 @@ class ActiveBoxZoneProjection:
         }
 
     def __post_init__(self) -> None:
-        from msa.domain import BoundaryRef, LifecycleState, StructureObjectKind
+        from msa.domain import BoundaryRef, LifecycleState, MarketRole, PriceRange, StructureObjectKind
         name=type(self).__name__; _schema(self.schema_version,name,ActiveBoxContractError)
         for item in ("source_score_frame_id","source_zone_key_id","source_zone_snapshot_id"): _text(getattr(self,item),item)
         object.__setattr__(self,"selection_confirm_time",_time(self.selection_confirm_time,"selection_confirm_time"))
@@ -548,12 +548,41 @@ class ActiveBoxZoneProjection:
             raise ActiveBoxContractError("projection output context must equal explicit config")
         evidence_ids=_string_tuple(self.member_evidence_ids,"member_evidence_ids",unique=True,canonical=True)
         boundary_ids=_string_tuple(self.member_boundary_ids,"member_boundary_ids",unique=True,canonical=True)
+        canonical_members=tuple(sorted(self.cluster.member_refs,key=lambda item:item.object_id))
+        if self.cluster.member_refs!=canonical_members:
+            raise ActiveBoxContractError("projection Cluster member_refs must be canonical")
         if tuple(item.object_id for item in self.cluster.member_refs)!=boundary_ids:
             raise ActiveBoxContractError("projection member Boundary IDs must exactly cover cluster members")
+        envelope=PriceRange(low=min(item.price_range.low for item in canonical_members),high=max(item.price_range.high for item in canonical_members))
+        if self.cluster.price_range!=envelope:
+            raise ActiveBoxContractError("projection Cluster range must equal member envelope")
+        if self.cluster.origin_time!=min(item.origin_time for item in canonical_members):
+            raise ActiveBoxContractError("projection Cluster origin must equal earliest member OriginTime")
+        if any(item.boundary_side is not self.cluster.boundary_side for item in canonical_members):
+            raise ActiveBoxContractError("projection Cluster side must equal every member side")
+        expected_role=MarketRole.RESISTANCE if self.cluster.boundary_side is BoundarySide.UPPER else MarketRole.SUPPORT
+        if self.cluster.market_role is not expected_role:
+            raise ActiveBoxContractError("projection Cluster role contradicts boundary side")
+        if self.cluster.cluster_family!=f"active-box-zone-v1:{self.source_zone_key_id}":
+            raise ActiveBoxContractError("projection Cluster family contradicts source Zone key")
         if any(item.confirm_time>self.selection_confirm_time for item in self.cluster.member_refs):
             raise ActiveBoxContractError("projection cannot include a future member")
-        require_semantic_id(self.projection_id,"active-box-projection-v1-",self._identity_payload(),"projection_id",ActiveBoxContractError)
         parents=(self.source_score_frame_id,self.source_zone_snapshot_id,*evidence_ids,*boundary_ids)
+        expected_cluster_payload=cluster_identity_payload(
+            config=self.config_snapshot,source_score_frame_id=self.source_score_frame_id,
+            source_zone_key_id=self.source_zone_key_id,source_zone_snapshot_id=self.source_zone_snapshot_id,
+            selection_confirm_time=self.selection_confirm_time,symbol=self.cluster.symbol,
+            timeframe=self.cluster.timeframe,scale=self.cluster.scale,price_range=self.cluster.price_range,
+            boundary_side=self.cluster.boundary_side,market_role=self.cluster.market_role,
+            lifecycle_state=self.cluster.lifecycle_state,origin_time=self.cluster.origin_time,
+            member_refs=self.cluster.member_refs,cluster_family=self.cluster.cluster_family,
+            schema_version=self.schema_version,
+        )
+        require_semantic_id(self.cluster.cluster_id,"active-box-zone-cluster-v1-",expected_cluster_payload,"cluster_id",ActiveBoxContractError)
+        _provenance(self.cluster.provenance,name="StructureCluster",module=_PROJECTION_MODULE,
+            version=self.config_snapshot.engine_version,object_id=self.cluster.cluster_id,
+            policy_id=self.config_snapshot.policy_id,engine_id=self.config_snapshot.engine_id,parents=parents)
+        require_semantic_id(self.projection_id,"active-box-projection-v1-",self._identity_payload(),"projection_id",ActiveBoxContractError)
         _provenance(self.provenance,name=name,module=_PROJECTION_MODULE,version=self.config_snapshot.engine_version,
             object_id=self.projection_id,policy_id=self.config_snapshot.policy_id,engine_id=self.config_snapshot.engine_id,parents=parents)
 
@@ -615,6 +644,8 @@ class ActiveBoxSnapshot:
         for n in ("observed_lower_zone_key_id","observed_lower_zone_snapshot_id","observed_upper_zone_key_id","observed_upper_zone_snapshot_id"): _text(getattr(self,n),n)
         if not isinstance(self.config_snapshot,ActiveBoxSelectionConfig) or not isinstance(self.lower_projection,ActiveBoxZoneProjection) or not isinstance(self.upper_projection,ActiveBoxZoneProjection) or not isinstance(self.active_box,ActiveBox):
             raise ActiveBoxContractError("ActiveBoxSnapshot nested type is invalid")
+        if self.lower_projection.config_snapshot!=self.config_snapshot or self.upper_projection.config_snapshot!=self.config_snapshot:
+            raise ActiveBoxContractError("ActiveBoxSnapshot projections must share exact config")
         if self.lower_projection.boundary.boundary_side is not BoundarySide.LOWER or self.upper_projection.boundary.boundary_side is not BoundarySide.UPPER:
             raise ActiveBoxContractError("snapshot projection sides are invalid")
         if self.observed_lower_zone_key_id!=self.lower_projection.source_zone_key_id or self.observed_upper_zone_key_id!=self.upper_projection.source_zone_key_id:
@@ -693,9 +724,18 @@ class ActiveBoxEvent:
         if (self.lower_zone_key_id,self.upper_zone_key_id)!=(result.observed_lower_zone_key_id,result.observed_upper_zone_key_id): raise ActiveBoxContractError("event zone keys contradict resulting snapshot")
         if self.event_type is ActiveBoxEventType.CREATED:
             if self.previous_box_snapshot_id is not None or self.previous_box_snapshot is not None or result.active_box.status is not ActiveBoxStatus.ACTIVE or self.event_reason not in (ActiveBoxEventReason.INITIAL_PAIR,ActiveBoxEventReason.PAIR_CHANGED): raise ActiveBoxContractError("CREATED event chain is invalid")
+            if result.created_time!=self.event_confirm_time or result.active_box.confirm_time!=self.event_confirm_time or result.active_box.as_of_time!=self.event_confirm_time or result.lower_projection.selection_confirm_time!=self.event_confirm_time or result.upper_projection.selection_confirm_time!=self.event_confirm_time:
+                raise ActiveBoxContractError("CREATED event time chain is invalid")
         else:
             previous=self.previous_box_snapshot
             if previous is None or self.previous_box_snapshot_id!=previous.box_snapshot_id or previous.active_box.status is not ActiveBoxStatus.ACTIVE or result.active_box.status is not ActiveBoxStatus.FROZEN or previous.box_key_id!=result.box_key_id or self.event_reason not in (ActiveBoxEventReason.PAIR_CHANGED,ActiveBoxEventReason.PAIR_UNAVAILABLE): raise ActiveBoxContractError("FROZEN event chain is invalid")
+            if previous.active_box.as_of_time>self.event_confirm_time:
+                raise ActiveBoxContractError("FROZEN previous snapshot cannot be later than event")
+            if (result.created_time,result.lower_projection,result.upper_projection,result.active_box.selection_price,
+                result.observed_lower_zone_key_id,result.observed_lower_zone_snapshot_id,result.observed_upper_zone_key_id,result.observed_upper_zone_snapshot_id)!=(
+                previous.created_time,previous.lower_projection,previous.upper_projection,previous.active_box.selection_price,
+                previous.observed_lower_zone_key_id,previous.observed_lower_zone_snapshot_id,previous.observed_upper_zone_key_id,previous.observed_upper_zone_snapshot_id):
+                raise ActiveBoxContractError("FROZEN event changed stable episode facts")
         require_semantic_id(self.event_id,"active-box-event-v1-",self._identity_payload(),"event_id",ActiveBoxContractError)
         config=result.config_snapshot
         parents=(self.source_score_frame_id,self.resulting_box_snapshot_id) if self.previous_box_snapshot_id is None else (self.source_score_frame_id,self.previous_box_snapshot_id,self.resulting_box_snapshot_id)
@@ -847,6 +887,8 @@ class ActiveBoxSelectionFrame:
         else:
             if self.active_box_snapshot.active_box.status is not ActiveBoxStatus.ACTIVE or self.active_box_snapshot.source_score_frame_id!=self.source_score_frame_id:
                 raise ActiveBoxContractError("current frame snapshot must be ACTIVE and source-aligned")
+            if self.active_box_snapshot.active_box.as_of_time!=self.source_score_frame.as_of_time:
+                raise ActiveBoxContractError("ACTIVE Box AsOf must equal current ScoreFrame AsOf")
             if selected!=(self.active_box_snapshot.observed_lower_zone_key_id,self.active_box_snapshot.observed_upper_zone_key_id): raise ActiveBoxContractError("Active Box keys must match decisions")
             selected_snapshots=(self.lower_decision.selected_zone_snapshot_id,self.upper_decision.selected_zone_snapshot_id)
             if selected_snapshots!=(self.active_box_snapshot.observed_lower_zone_snapshot_id,self.active_box_snapshot.observed_upper_zone_snapshot_id): raise ActiveBoxContractError("Active Box observed Zone snapshots must match decisions")
@@ -873,6 +915,20 @@ class ActiveBoxSelectionFrame:
             expected_pattern=((ActiveBoxEventType.FROZEN,ActiveBoxEventReason.PAIR_CHANGED),(ActiveBoxEventType.CREATED,ActiveBoxEventReason.PAIR_CHANGED))
         actual_pattern=tuple((item.event_type,item.event_reason) for item in self.emitted_events)
         if actual_pattern!=expected_pattern: raise ActiveBoxContractError("SelectionFrame event pattern contradicts pair transition facts")
+        frozen_events=tuple(item for item in self.emitted_events if item.event_type is ActiveBoxEventType.FROZEN)
+        for event in frozen_events:
+            previous=event.previous_box_snapshot
+            if previous is None or (previous.observed_lower_zone_key_id,previous.observed_upper_zone_key_id)!=current:
+                raise ActiveBoxContractError("FROZEN previous stable Zone keys must equal Decision current keys")
+            if event.resulting_box_snapshot.source_score_frame_id!=self.source_score_frame_id or event.event_confirm_time!=self.as_of_time:
+                raise ActiveBoxContractError("FROZEN event must bind current ScoreFrame and AsOf")
+        for event in created:
+            result=event.resulting_box_snapshot
+            if (result.observed_lower_zone_key_id,result.observed_upper_zone_key_id)!=selected or (result.observed_lower_zone_snapshot_id,result.observed_upper_zone_snapshot_id)!=(self.lower_decision.selected_zone_snapshot_id,self.upper_decision.selected_zone_snapshot_id):
+                raise ActiveBoxContractError("CREATED snapshot must equal Decision selected facts")
+            from .projection import validate_zone_projection
+            validate_zone_projection(self.source_score_frame,self.config_snapshot,result.lower_projection)
+            validate_zone_projection(self.source_score_frame,self.config_snapshot,result.upper_projection)
         if not isinstance(self.report,ActiveBoxSelectionReport) or self.report!=_expected_report(self.source_score_frame,self.lower_decision,self.upper_decision,self.active_box_snapshot,self.emitted_events,self.config_snapshot): raise ActiveBoxContractError("SelectionFrame report contradicts exact facts")
         require_semantic_id(self.selection_frame_id,"active-box-selection-frame-v1-",self._identity_payload(),"selection_frame_id",ActiveBoxContractError)
         parents=(self.source_score_frame_id,self.lower_decision.decision_id,self.upper_decision.decision_id,*(item.event_id for item in self.emitted_events))
@@ -920,12 +976,25 @@ class ActiveBoxSelectionHistory:
         flattened=tuple(event for frame in self.frames for event in frame.emitted_events)
         if not isinstance(self.events,tuple) or self.events!=flattened: raise ActiveBoxContractError("History events must exactly flatten Frame events")
         if any(current.event_confirm_time<previous.event_confirm_time for previous,current in zip(self.events,self.events[1:])): raise ActiveBoxContractError("History event times must be monotonic")
-        by_key:dict[str,list[ActiveBoxEvent]]={}
-        for event in self.events: by_key.setdefault(event.box_key_id,[]).append(event)
+        if not isinstance(self.frozen_boxes,tuple) or any(not isinstance(item,ActiveBoxSnapshot) for item in self.frozen_boxes): raise ActiveBoxContractError("frozen_boxes must be a tuple of snapshots")
+        by_key:dict[str,list[tuple[int,ActiveBoxEvent]]]={}
+        for position,event in enumerate(self.events): by_key.setdefault(event.box_key_id,[]).append((position,event))
+        all_box_keys={
+            snapshot.box_key_id
+            for frame in self.frames
+            for snapshot in (
+                *((frame.active_box_snapshot,) if frame.active_box_snapshot is not None else ()),
+                *(item.previous_box_snapshot for item in frame.emitted_events if item.previous_box_snapshot is not None),
+                *(item.resulting_box_snapshot for item in frame.emitted_events),
+            )
+        }|{item.box_key_id for item in self.frozen_boxes}
+        if set(by_key)!=all_box_keys: raise ActiveBoxContractError("every appearing Box must have an event ledger")
         for box_key, ledger in by_key.items():
-            if sum(item.event_type is ActiveBoxEventType.CREATED for item in ledger)!=1 or sum(item.event_type is ActiveBoxEventType.FROZEN for item in ledger)>1: raise ActiveBoxContractError(f"box {box_key} event ledger is invalid")
+            created=tuple(position for position,item in ledger if item.event_type is ActiveBoxEventType.CREATED)
+            frozen_positions=tuple(position for position,item in ledger if item.event_type is ActiveBoxEventType.FROZEN)
+            if len(created)!=1 or len(frozen_positions)>1 or (frozen_positions and created[0]>=frozen_positions[0]): raise ActiveBoxContractError(f"box {box_key} event ledger is invalid")
         frozen=tuple(item.resulting_box_snapshot for item in self.events if item.event_type is ActiveBoxEventType.FROZEN)
-        if not isinstance(self.frozen_boxes,tuple) or self.frozen_boxes!=frozen or len({item.box_key_id for item in frozen})!=len(frozen): raise ActiveBoxContractError("frozen_boxes ledger must exactly match FROZEN events")
+        if self.frozen_boxes!=frozen or len({item.box_key_id for item in frozen})!=len(frozen): raise ActiveBoxContractError("frozen_boxes ledger must exactly match FROZEN events")
         frozen_at={item.box_key_id:item.active_box.confirm_time for item in frozen}
         for frame in self.frames:
             if frame.active_box_snapshot is not None and frame.active_box_snapshot.box_key_id in frozen_at and frame.as_of_time>=frozen_at[frame.active_box_snapshot.box_key_id]: raise ActiveBoxContractError("FROZEN Box cannot reactivate")
@@ -934,6 +1003,34 @@ class ActiveBoxSelectionHistory:
             if left is not None and right is not None and left.box_key_id==right.box_key_id:
                 if (left.lower_projection,left.upper_projection,left.created_time,left.active_box.selection_price)!=(right.lower_projection,right.upper_projection,right.created_time,right.active_box.selection_price):
                     raise ActiveBoxContractError("unchanged Box episode projections and creation facts must remain stable")
+        previous_active:ActiveBoxSnapshot|None=None
+        for frame in self.frames:
+            current_keys=(frame.lower_decision.current_zone_key_id,frame.upper_decision.current_zone_key_id)
+            selected_keys=(frame.lower_decision.selected_zone_key_id,frame.upper_decision.selected_zone_key_id)
+            if previous_active is None:
+                if current_keys!=(None,None): raise ActiveBoxContractError("Frame without previous Active Box must have no current keys")
+                previous_active=frame.active_box_snapshot
+                continue
+            expected_current=(previous_active.observed_lower_zone_key_id,previous_active.observed_upper_zone_key_id)
+            if current_keys!=expected_current: raise ActiveBoxContractError("Decision current keys must equal previous Active Box")
+            complete=all(item is not None for item in selected_keys)
+            if not complete:
+                expected_frozen=freeze_active_box_snapshot(frame.source_score_frame,previous_active)
+                if frame.active_box_snapshot is not None or len(frame.emitted_events)!=1 or frame.emitted_events[0].previous_box_snapshot!=previous_active or frame.emitted_events[0].resulting_box_snapshot!=expected_frozen:
+                    raise ActiveBoxContractError("PAIR_UNAVAILABLE transition is not the formal freeze")
+                previous_active=None
+            elif selected_keys==expected_current:
+                expected_observed=observe_active_box_snapshot(frame.source_score_frame,previous_active,frame.lower_decision.selected_zone_snapshot_id,frame.upper_decision.selected_zone_snapshot_id)
+                if frame.emitted_events or frame.active_box_snapshot!=expected_observed:
+                    raise ActiveBoxContractError("unchanged Pair must equal formal observe result")
+                previous_active=frame.active_box_snapshot
+            else:
+                expected_frozen=freeze_active_box_snapshot(frame.source_score_frame,previous_active)
+                if len(frame.emitted_events)!=2 or frame.emitted_events[0].previous_box_snapshot!=previous_active or frame.emitted_events[0].resulting_box_snapshot!=expected_frozen or frame.emitted_events[1].resulting_box_snapshot!=frame.active_box_snapshot:
+                    raise ActiveBoxContractError("PAIR_CHANGED transition is not atomic")
+                if frame.active_box_snapshot is None or frame.active_box_snapshot.box_key_id==previous_active.box_key_id:
+                    raise ActiveBoxContractError("PAIR_CHANGED must create a distinct new episode")
+                previous_active=frame.active_box_snapshot
 
     def to_dict(self)->dict[str,object]:
         return {"schema_version":self.schema_version,"frames":[item.to_dict() for item in self.frames],"final_frame":self.final_frame.to_dict(),
@@ -994,8 +1091,11 @@ def create_active_box_snapshot(
     config: ActiveBoxSelectionConfig,
 ) -> ActiveBoxSnapshot:
     """Construct one caller-requested ACTIVE episode snapshot; no selection occurs."""
-    if lower_projection.selection_confirm_time!=source_score_frame.as_of_time or upper_projection.selection_confirm_time!=source_score_frame.as_of_time:
-        raise ActiveBoxContractError("new Box projections must be confirmed at creation Frame")
+    from .projection import validate_zone_projection
+    validate_zone_projection(source_score_frame,config,lower_projection)
+    validate_zone_projection(source_score_frame,config,upper_projection)
+    if lower_projection.source_score_frame_id!=source_score_frame.score_frame_id or upper_projection.source_score_frame_id!=source_score_frame.score_frame_id or lower_projection.selection_confirm_time!=source_score_frame.as_of_time or upper_projection.selection_confirm_time!=source_score_frame.as_of_time:
+        raise ActiveBoxContractError("new Box projections must bind the creation Frame")
     return _make_box_snapshot(source_score_frame=source_score_frame,config=config,created_time=source_score_frame.as_of_time,
         lower_projection=lower_projection,upper_projection=upper_projection,
         observed_lower_zone_snapshot_id=lower_projection.source_zone_snapshot_id,
@@ -1012,6 +1112,19 @@ def observe_active_box_snapshot(
     """Advance an unchanged episode observation without changing projections."""
     if previous.active_box.status is not ActiveBoxStatus.ACTIVE:
         raise ActiveBoxContractError("only an ACTIVE episode can be observed")
+    if source_score_frame.as_of_time<=previous.active_box.as_of_time:
+        raise ActiveBoxContractError("observation time must strictly advance")
+    if source_score_frame.source_frame.config_snapshot.symbol!=previous.config_snapshot.symbol:
+        raise ActiveBoxContractError("observation symbol/config conflicts with previous Box")
+    by_key={zone.zone_key_id:zone for zone in source_score_frame.zones}
+    lower=by_key.get(previous.observed_lower_zone_key_id); upper=by_key.get(previous.observed_upper_zone_key_id)
+    if lower is None or upper is None:
+        raise ActiveBoxContractError("previous stable Zone keys must exist in current ScoreFrame")
+    if lower.zone_snapshot_id!=lower_zone_snapshot_id or upper.zone_snapshot_id!=upper_zone_snapshot_id:
+        raise ActiveBoxContractError("observed Zone snapshot IDs must equal current authoritative Zones")
+    price=source_score_frame.source_frame.reference_price.price
+    if not previous.active_box.lower_boundary.price_range.high<=price<=previous.active_box.upper_boundary.price_range.low:
+        raise ActiveBoxContractError("current reference price must remain inside Active Box")
     return _make_box_snapshot(source_score_frame=source_score_frame,config=previous.config_snapshot,created_time=previous.created_time,
         lower_projection=previous.lower_projection,upper_projection=previous.upper_projection,
         observed_lower_zone_snapshot_id=_text(lower_zone_snapshot_id,"lower_zone_snapshot_id"),
@@ -1023,6 +1136,10 @@ def freeze_active_box_snapshot(source_score_frame: ResonanceScoreFrame, previous
     """Construct a caller-requested terminal FROZEN snapshot; no policy decision occurs."""
     if previous.active_box.status is not ActiveBoxStatus.ACTIVE:
         raise ActiveBoxContractError("only an ACTIVE episode can be frozen")
+    if source_score_frame.as_of_time<previous.active_box.as_of_time:
+        raise ActiveBoxContractError("freeze time cannot move backward")
+    if source_score_frame.source_frame.config_snapshot.symbol!=previous.config_snapshot.symbol:
+        raise ActiveBoxContractError("freeze symbol/config conflicts with previous Box")
     return _make_box_snapshot(source_score_frame=source_score_frame,config=previous.config_snapshot,created_time=previous.created_time,
         lower_projection=previous.lower_projection,upper_projection=previous.upper_projection,
         observed_lower_zone_snapshot_id=previous.observed_lower_zone_snapshot_id,

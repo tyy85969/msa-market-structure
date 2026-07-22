@@ -20,7 +20,7 @@ from .contracts import (
     ActiveBoxZoneProjection,
 )
 from .errors import ActiveBoxProjectionError
-from .identity import semantic_id
+from .identity import cluster_identity_payload, semantic_id
 
 
 _MODULE = "msa.research.active_box.projection"
@@ -75,19 +75,17 @@ def project_zone(
     evidence_ids = tuple(sorted(item.evidence_id for item in selected_evidence))
     boundary_ids = tuple(item.object_id for item in members)
     family = f"active-box-zone-v1:{zone.zone_key_id}"
-    cluster_payload = {
-        "config": config.to_dict(), "source_score_frame_id": source_score_frame.score_frame_id,
-        "source_zone_key_id": zone.zone_key_id, "source_zone_snapshot_id": zone.zone_snapshot_id,
-        "selection_confirm_time": selection_confirm_time.isoformat(),
-        "symbol": config.symbol, "timeframe": config.output_timeframe.value,
-        "scale": config.output_scale.to_dict(), "price_range": zone.price_range.to_dict(),
-        "boundary_side": zone.side.value,
-        "market_role": (MarketRole.RESISTANCE if zone.side is BoundarySide.UPPER else MarketRole.SUPPORT).value,
-        "lifecycle_state": LifecycleState.CONFIRMED.value,
-        "origin_time": min(item.origin_time for item in members).isoformat(),
-        "member_refs": [item.to_dict() for item in members], "cluster_family": family,
-        "schema_version": SCHEMA_VERSION,
-    }
+    cluster_payload = cluster_identity_payload(
+        config=config, source_score_frame_id=source_score_frame.score_frame_id,
+        source_zone_key_id=zone.zone_key_id, source_zone_snapshot_id=zone.zone_snapshot_id,
+        selection_confirm_time=selection_confirm_time, symbol=config.symbol,
+        timeframe=config.output_timeframe, scale=config.output_scale,
+        price_range=zone.price_range, boundary_side=zone.side,
+        market_role=MarketRole.RESISTANCE if zone.side is BoundarySide.UPPER else MarketRole.SUPPORT,
+        lifecycle_state=LifecycleState.CONFIRMED,
+        origin_time=min(item.origin_time for item in members), member_refs=members,
+        cluster_family=family, schema_version=SCHEMA_VERSION,
+    )
     cluster_id = semantic_id("active-box-zone-cluster-v1-", cluster_payload)
     parents = (
         source_score_frame.score_frame_id, zone.zone_snapshot_id,
@@ -138,3 +136,33 @@ def project_zone(
         )
     except (TypeError, ValueError) as exc:
         raise ActiveBoxProjectionError(f"invalid ActiveBoxZoneProjection: {exc}") from exc
+
+
+def validate_zone_projection(
+    source_score_frame: ResonanceScoreFrame,
+    config: ActiveBoxSelectionConfig,
+    projection: ActiveBoxZoneProjection,
+) -> None:
+    """Require a Projection to equal the authoritative current-Frame result."""
+    if not isinstance(source_score_frame, ResonanceScoreFrame):
+        raise ActiveBoxProjectionError("source_score_frame must be a ResonanceScoreFrame")
+    if not isinstance(config, ActiveBoxSelectionConfig) or not isinstance(projection, ActiveBoxZoneProjection):
+        raise ActiveBoxProjectionError("config/projection type is invalid")
+    if projection.source_score_frame_id != source_score_frame.score_frame_id:
+        raise ActiveBoxProjectionError("Projection source ScoreFrame ID is not current")
+    matches = tuple(
+        zone for zone in source_score_frame.zones
+        if zone.zone_key_id == projection.source_zone_key_id
+        and zone.zone_snapshot_id == projection.source_zone_snapshot_id
+    )
+    if len(matches) != 1:
+        raise ActiveBoxProjectionError("Projection must bind one exact current ScoreFrame Zone")
+    if projection.selection_confirm_time != source_score_frame.as_of_time:
+        raise ActiveBoxProjectionError("Projection selection time must equal current ScoreFrame AsOf")
+    if config.symbol != source_score_frame.source_frame.config_snapshot.symbol:
+        raise ActiveBoxProjectionError("config symbol conflicts with source ScoreFrame")
+    expected = project_zone(
+        source_score_frame, matches[0], config, source_score_frame.as_of_time
+    )
+    if projection != expected:
+        raise ActiveBoxProjectionError("Projection is not the authoritative current-Frame projection")
