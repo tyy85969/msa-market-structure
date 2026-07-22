@@ -1,4 +1,4 @@
-"""Public causal C-007A multi-context resonance-frame framework."""
+"""Public causal C-007A Frame and C-007B resonance-scoring frameworks."""
 
 from .assembler import ResonanceFrameAssembler
 from .contracts import (
@@ -21,8 +21,39 @@ from .errors import (
     ResonanceFrameEngineError,
     ResonanceFrameInputError,
     ResonanceFrameSerializationError,
+    ResonanceScoringConfigurationError,
+    ResonanceScoringEngineError,
+    ResonanceScoringInputError,
+    ResonanceScoringSerializationError,
 )
 from .replay import build_history, iter_replay_frames, replay_history
+from .scoring import ResonanceScorer
+from .scoring_contracts import (
+    ResonanceClass,
+    ResonanceClassRationale,
+    ResonanceClusteringPolicy,
+    ResonanceContextWeight,
+    ResonanceDependencyComponent,
+    ResonanceDependencyEdge,
+    ResonanceDirectionRelation,
+    ResonanceEvidenceContribution,
+    ResonanceFactorTable,
+    ResonancePriceRelation,
+    ResonanceRangeGap,
+    ResonanceRankKey,
+    ResonanceScoreFrame,
+    ResonanceScoreHistory,
+    ResonanceScoreReport,
+    ResonanceScoringConfig,
+    ResonanceToleranceMode,
+    ResonanceZone,
+    ResonanceZoneExplanation,
+)
+from .scoring_replay import (
+    build_score_history,
+    iter_replay_score_frames,
+    replay_score_history,
+)
 
 __all__ = [
     "SCHEMA_VERSION",
@@ -43,7 +74,34 @@ __all__ = [
     "ResonanceFrameInputError",
     "ResonanceFrameReport",
     "ResonanceFrameSerializationError",
+    "ResonanceClass",
+    "ResonanceClassRationale",
+    "ResonanceClusteringPolicy",
+    "ResonanceContextWeight",
+    "ResonanceDependencyComponent",
+    "ResonanceDependencyEdge",
+    "ResonanceDirectionRelation",
+    "ResonanceEvidenceContribution",
+    "ResonanceFactorTable",
+    "ResonancePriceRelation",
+    "ResonanceRangeGap",
+    "ResonanceRankKey",
+    "ResonanceScoreFrame",
+    "ResonanceScoreHistory",
+    "ResonanceScoreReport",
+    "ResonanceScorer",
+    "ResonanceScoringConfig",
+    "ResonanceScoringConfigurationError",
+    "ResonanceScoringEngineError",
+    "ResonanceScoringInputError",
+    "ResonanceScoringSerializationError",
+    "ResonanceToleranceMode",
+    "ResonanceZone",
+    "ResonanceZoneExplanation",
+    "build_score_history",
     "build_history",
     "iter_replay_frames",
+    "iter_replay_score_frames",
+    "replay_score_history",
     "replay_history",
 ]
