@@ -5,8 +5,6 @@ from __future__ import annotations
 from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from decimal import Decimal
-from hashlib import sha256
-import json
 from typing import Any, Iterator, Mapping
 
 from msa.domain import (
@@ -37,6 +35,7 @@ from .contracts import (
     TimeframeStateInput,
     TimeframeStateReport,
     TimeframeStateSnapshot,
+    _direction_transition,
     _exact_payload,
 )
 from .errors import (
@@ -44,28 +43,10 @@ from .errors import (
     TimeframeStateInputError,
     TimeframeStateSerializationError,
 )
+from .identity import _event_id, _snapshot_id, _state_id
 
 
 SOURCE_MODULE = "msa.research.timeframe_state.engine"
-
-
-def _canonical_json(value: object) -> str:
-    try:
-        return json.dumps(
-            value,
-            ensure_ascii=False,
-            sort_keys=True,
-            separators=(",", ":"),
-            allow_nan=False,
-        )
-    except (TypeError, ValueError) as exc:
-        raise TimeframeStateEngineError(
-            "unable to build canonical timeframe-state JSON"
-        ) from exc
-
-
-def _digest(value: object) -> str:
-    return sha256(_canonical_json(value).encode("utf-8")).hexdigest()
 
 
 def _processing_time(value: object) -> datetime:
@@ -233,60 +214,22 @@ def _pair_values(
 
 def _direction(
     previous_direction: Direction,
-    previous_pair: _PairIdentity | None,
+    last_complete_pair: _PairIdentity | None,
+    previous_current_pair: _PairIdentity | None,
     current_pair: _PairIdentity | None,
 ) -> tuple[Direction, Direction, bool, str]:
-    if current_pair is None:
-        if previous_pair is None:
-            return (
-                Direction.UNKNOWN,
-                Direction.UNKNOWN,
-                False,
-                "no complete Confirmed Pair has formed",
-            )
-        return (
-            Direction.TURNING,
-            Direction.TURNING,
-            True,
-            "a previously complete Confirmed Pair is now incomplete",
-        )
-    if previous_pair is None:
-        return (
-            Direction.RANGE,
-            Direction.RANGE,
-            True,
-            "the first complete Confirmed Pair initializes RANGE",
-        )
-    same_position = (
-        current_pair.subject_ids == previous_pair.subject_ids
-        and current_pair.midpoints == previous_pair.midpoints
+    last_values = _pair_values(last_complete_pair)
+    previous_values = _pair_values(previous_current_pair)
+    current_values = _pair_values(current_pair)
+    return _direction_transition(
+        previous_direction,
+        last_values[0],
+        last_values[3],
+        previous_values[0],
+        previous_values[3],
+        current_values[0],
+        current_values[3],
     )
-    if same_position:
-        return (
-            previous_direction,
-            previous_direction,
-            False,
-            "underlying subject IDs and both Decimal midpoints are unchanged",
-        )
-    current_upper, current_lower = current_pair.midpoints
-    previous_upper, previous_lower = previous_pair.midpoints
-    if current_upper > previous_upper and current_lower > previous_lower:
-        raw = Direction.UP
-    elif current_upper < previous_upper and current_lower < previous_lower:
-        raw = Direction.DOWN
-    else:
-        raw = Direction.RANGE
-    if (
-        previous_direction is Direction.UP and raw is Direction.DOWN
-    ) or (
-        previous_direction is Direction.DOWN and raw is Direction.UP
-    ):
-        final = Direction.TURNING
-        rationale = "the raw direction reverses the preceding UP or DOWN state"
-    else:
-        final = raw
-        rationale = "the changed complete pair adopts the raw midpoint comparison"
-    return final, raw, True, rationale
 
 
 def _semantic_values(
@@ -660,34 +603,33 @@ class TimeframeStateEngine:
         origin_time: datetime,
         confirm_time: datetime,
     ) -> str:
-        identity = {
-            "engine_id": self.config.engine_id,
-            "engine_version": self.config.engine_version,
-            "policy_id": self.config.policy_id,
-            "symbol": self.config.symbol,
-            "target_timeframe": self.config.target_timeframe.value,
-            "target_scale": self.config.target_scale.to_dict(),
-            "selection_policy": self.config.selection_policy.value,
-            "direction": semantic["direction"].value,  # type: ignore[union-attr]
-            "candidate_upper_boundary": self._boundary_payload(
+        return _state_id(
+            engine_id=self.config.engine_id,
+            engine_version=self.config.engine_version,
+            policy_id=self.config.policy_id,
+            symbol=self.config.symbol,
+            target_timeframe=self.config.target_timeframe.value,
+            target_scale=self.config.target_scale.to_dict(),
+            selection_policy=self.config.selection_policy.value,
+            direction=semantic["direction"].value,  # type: ignore[union-attr]
+            candidate_upper_boundary=self._boundary_payload(
                 semantic["candidate_upper_boundary"]
             ),
-            "candidate_lower_boundary": self._boundary_payload(
+            candidate_lower_boundary=self._boundary_payload(
                 semantic["candidate_lower_boundary"]
             ),
-            "confirmed_upper_boundary": self._boundary_payload(
+            confirmed_upper_boundary=self._boundary_payload(
                 semantic["confirmed_upper_boundary"]
             ),
-            "confirmed_lower_boundary": self._boundary_payload(
+            confirmed_lower_boundary=self._boundary_payload(
                 semantic["confirmed_lower_boundary"]
             ),
-            "forming_candidate_ids": list(semantic["forming_candidate_ids"]),
-            "origin_time": origin_time.isoformat(),
-            "confirm_time": confirm_time.isoformat(),
-            "domain_schema_version": 2,
-            "engine_schema_version": SCHEMA_VERSION,
-        }
-        return f"timeframe-state-v1-{_digest(identity)}"
+            forming_candidate_ids=semantic["forming_candidate_ids"],  # type: ignore[arg-type]
+            origin_time=origin_time,
+            confirm_time=confirm_time,
+            domain_schema_version=2,
+            engine_schema_version=SCHEMA_VERSION,
+        )
 
     @staticmethod
     def _boundary_payload(value: object) -> object:
@@ -707,27 +649,24 @@ class TimeframeStateEngine:
         source_lifecycle_event_ids: tuple[str, ...],
         prior_event_id: str | None,
     ) -> str:
-        identity = {
-            "engine_id": self.config.engine_id,
-            "engine_version": self.config.engine_version,
-            "policy_id": self.config.policy_id,
-            "previous_state_id": previous_state_id,
-            "current_state_id": current_state_id,
-            "event_type": event_type.value,
-            "event_confirm_time": event_confirm_time.isoformat(),
-            "previous_direction": (
+        return _event_id(
+            engine_id=self.config.engine_id,
+            engine_version=self.config.engine_version,
+            policy_id=self.config.policy_id,
+            previous_state_id=previous_state_id,
+            current_state_id=current_state_id,
+            event_type=event_type.value,
+            event_confirm_time=event_confirm_time,
+            previous_direction=(
                 None if previous_direction is None else previous_direction.value
             ),
-            "current_direction": current_direction.value,
-            "changed_fields": list(changed_fields),
-            "source_lifecycle_snapshot_id": source_lifecycle_snapshot_id,
-            "source_lifecycle_event_ids": list(source_lifecycle_event_ids),
-            "prior_event_id": prior_event_id,
-            "schema_version": SCHEMA_VERSION,
-        }
-        digest = _digest(identity)
-        time_key = event_confirm_time.strftime("%Y%m%dT%H%M%S.%fZ")
-        return f"timeframe-state-event-v1-{time_key}-{digest}"
+            current_direction=current_direction.value,
+            changed_fields=changed_fields,
+            source_lifecycle_snapshot_id=source_lifecycle_snapshot_id,
+            source_lifecycle_event_ids=source_lifecycle_event_ids,
+            prior_event_id=prior_event_id,
+            schema_version=SCHEMA_VERSION,
+        )
 
     def _report(
         self,
@@ -803,6 +742,7 @@ class TimeframeStateEngine:
         previous_source: LifecycleSnapshot | None = None
         previous_snapshot: TimeframeStateSnapshot | None = None
         last_complete_pair: _PairIdentity | None = None
+        previous_current_pair: _PairIdentity | None = None
         events: list[TimeframeStateEvent] = []
         for index, source_snapshot in enumerate(source_snapshots, start=1):
             facts = self._selection(source_snapshot)
@@ -813,7 +753,10 @@ class TimeframeStateEngine:
                 else previous_snapshot.state.direction
             )
             final_direction, raw_direction, pair_changed, rationale = _direction(
-                previous_direction, last_complete_pair, current_pair
+                previous_direction,
+                last_complete_pair,
+                previous_current_pair,
+                current_pair,
             )
             explanation = self._explanation(
                 facts,
@@ -974,6 +917,7 @@ class TimeframeStateEngine:
             )
             if current_pair is not None:
                 last_complete_pair = current_pair
+            previous_current_pair = current_pair
             previous_source = source_snapshot
         if previous_snapshot is None:
             raise TimeframeStateEngineError(
@@ -990,17 +934,16 @@ class TimeframeStateEngine:
         events: tuple[TimeframeStateEvent, ...],
         report: TimeframeStateReport,
     ) -> str:
-        identity = {
-            "config": self.config.to_dict(),
-            "source_lifecycle_snapshot_id": source_lifecycle_snapshot_id,
-            "as_of_time": as_of_time.isoformat(),
-            "state": state.to_dict(),
-            "explanation": explanation.to_dict(),
-            "events": [item.to_dict() for item in events],
-            "report": report.to_dict(),
-            "schema_version": SCHEMA_VERSION,
-        }
-        return f"timeframe-state-snapshot-v1-{_digest(identity)}"
+        return _snapshot_id(
+            config=self.config.to_dict(),
+            source_lifecycle_snapshot_id=source_lifecycle_snapshot_id,
+            as_of_time=as_of_time,
+            state=state.to_dict(),
+            explanation=explanation.to_dict(),
+            events=tuple(item.to_dict() for item in events),
+            report=report.to_dict(),
+            schema_version=SCHEMA_VERSION,
+        )
 
     def _observe(
         self, snapshot: TimeframeStateSnapshot, as_of_time: datetime

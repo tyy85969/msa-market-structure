@@ -23,6 +23,12 @@ from .errors import (
     TimeframeStateInputError,
     TimeframeStateSerializationError,
 )
+from .identity import (
+    _engine_id_from_notes,
+    _event_id,
+    _snapshot_id,
+    _state_id,
+)
 
 
 SCHEMA_VERSION = 1
@@ -35,6 +41,92 @@ SEMANTIC_FIELDS = (
     "forming_candidate_ids",
 )
 CROSSED_PAIR_OLDER_SIDE = "CROSSED_PAIR_OLDER_SIDE"
+
+
+def _direction_transition(
+    previous_direction: Direction,
+    last_complete_subject_ids: tuple[str, ...],
+    last_complete_midpoints: tuple[Decimal, ...],
+    previous_current_subject_ids: tuple[str, ...],
+    previous_current_midpoints: tuple[Decimal, ...],
+    current_subject_ids: tuple[str, ...],
+    current_midpoints: tuple[Decimal, ...],
+) -> tuple[Direction, Direction, bool, str]:
+    """Apply the one authoritative Confirmed Pair direction transition."""
+    last_complete = bool(last_complete_subject_ids)
+    previous_current = bool(previous_current_subject_ids)
+    current = bool(current_subject_ids)
+    if current != bool(current_midpoints):
+        raise TimeframeStateEngineError("current pair identity is incomplete")
+    if last_complete != bool(last_complete_midpoints):
+        raise TimeframeStateEngineError("last complete pair identity is incomplete")
+    if previous_current != bool(previous_current_midpoints):
+        raise TimeframeStateEngineError("previous current pair identity is incomplete")
+    if not current:
+        if not last_complete:
+            return (
+                Direction.UNKNOWN,
+                Direction.UNKNOWN,
+                False,
+                "no complete Confirmed Pair has formed",
+            )
+        if previous_current:
+            return (
+                Direction.TURNING,
+                Direction.TURNING,
+                True,
+                "a previously complete Confirmed Pair is now incomplete",
+            )
+        return (
+            previous_direction,
+            previous_direction,
+            False,
+            "the Confirmed Pair remains incomplete after its first loss",
+        )
+    if not last_complete:
+        return (
+            Direction.RANGE,
+            Direction.RANGE,
+            True,
+            "the first complete Confirmed Pair initializes RANGE",
+        )
+    rebuilding = not previous_current
+    same_position = (
+        current_subject_ids == last_complete_subject_ids
+        and current_midpoints == last_complete_midpoints
+    )
+    if same_position and not rebuilding:
+        return (
+            previous_direction,
+            previous_direction,
+            False,
+            "underlying subject IDs and both Decimal midpoints are unchanged",
+        )
+    current_upper, current_lower = current_midpoints
+    previous_upper, previous_lower = last_complete_midpoints
+    if current_upper > previous_upper and current_lower > previous_lower:
+        raw = Direction.UP
+    elif current_upper < previous_upper and current_lower < previous_lower:
+        raw = Direction.DOWN
+    else:
+        raw = Direction.RANGE
+    if (
+        not rebuilding
+        and (
+            (previous_direction is Direction.UP and raw is Direction.DOWN)
+            or (previous_direction is Direction.DOWN and raw is Direction.UP)
+        )
+    ):
+        final = Direction.TURNING
+        rationale = "the raw direction reverses the preceding UP or DOWN state"
+    else:
+        final = raw
+        rationale = (
+            "the rebuilt complete pair compares with the last historical complete pair"
+            if rebuilding
+            else "the changed complete pair adopts the raw midpoint comparison"
+        )
+    return final, raw, True, rationale
 
 
 def _exact_payload(
@@ -876,6 +968,35 @@ class TimeframeStateEvent:
                 raise TimeframeStateEngineError(
                     "event_type contradicts changed_fields and directions"
                 )
+        try:
+            expected_event_id = _event_id(
+                engine_id=_engine_id_from_notes(self.provenance.notes),
+                engine_version=self.provenance.source_version,
+                policy_id=self.provenance.policy_id,
+                previous_state_id=self.previous_state_id,
+                current_state_id=self.current_state_id,
+                event_type=self.event_type.value,
+                event_confirm_time=confirm,
+                previous_direction=(
+                    None
+                    if self.previous_direction is None
+                    else self.previous_direction.value
+                ),
+                current_direction=self.current_direction.value,
+                changed_fields=changed,
+                source_lifecycle_snapshot_id=self.source_lifecycle_snapshot_id,
+                source_lifecycle_event_ids=source_ids,
+                prior_event_id=self.prior_event_id,
+                schema_version=self.schema_version,
+            )
+        except (TypeError, ValueError) as exc:
+            raise TimeframeStateEngineError(
+                f"event identity inputs are invalid: {exc}"
+            ) from exc
+        if self.event_id != expected_event_id:
+            raise TimeframeStateEngineError(
+                "event_id does not match the recomputed semantic identity"
+            )
         object.__setattr__(self, "event_confirm_time", confirm)
         object.__setattr__(self, "first_seen_time", first_seen)
         object.__setattr__(self, "changed_fields", changed)
@@ -1167,6 +1288,193 @@ def _validate_event_chain(events: tuple[TimeframeStateEvent, ...]) -> None:
         previous = event
 
 
+def _boundary_payload(boundary: object) -> object:
+    return None if boundary is None else boundary.to_dict()  # type: ignore[attr-defined]
+
+
+def _expected_state_id(state: TimeframeState) -> str:
+    try:
+        return _state_id(
+            engine_id=_engine_id_from_notes(state.provenance.notes),
+            engine_version=state.state_version,
+            policy_id=state.provenance.policy_id,
+            symbol=state.symbol,
+            target_timeframe=state.timeframe.value,
+            target_scale=state.scale.to_dict(),
+            selection_policy=TimeframeSelectionPolicy.LATEST_CAUSAL.value,
+            direction=state.direction.value,
+            candidate_upper_boundary=_boundary_payload(
+                state.candidate_upper_boundary
+            ),
+            candidate_lower_boundary=_boundary_payload(
+                state.candidate_lower_boundary
+            ),
+            confirmed_upper_boundary=_boundary_payload(
+                state.confirmed_upper_boundary
+            ),
+            confirmed_lower_boundary=_boundary_payload(
+                state.confirmed_lower_boundary
+            ),
+            forming_candidate_ids=state.forming_candidate_ids,
+            origin_time=state.origin_time,
+            confirm_time=state.confirm_time,
+            domain_schema_version=2,
+            engine_schema_version=SCHEMA_VERSION,
+        )
+    except (TypeError, ValueError) as exc:
+        raise TimeframeStateEngineError(
+            f"state identity inputs are invalid: {exc}"
+        ) from exc
+
+
+def _midpoint(boundary: object) -> Decimal:
+    price_range = boundary.price_range  # type: ignore[attr-defined]
+    return (price_range.low + price_range.high) / Decimal("2")
+
+
+def _validate_crossing_view(
+    explanation: BoundarySelectionExplanation, prefix: str
+) -> None:
+    raw_upper = getattr(explanation, f"raw_{prefix}_upper_boundary_id")
+    raw_lower = getattr(explanation, f"raw_{prefix}_lower_boundary_id")
+    selected_upper = getattr(explanation, f"selected_{prefix}_upper_id")
+    selected_lower = getattr(explanation, f"selected_{prefix}_lower_id")
+    conflict = getattr(explanation, f"{prefix}_crossing_conflict")
+    retained = getattr(explanation, f"{prefix}_retained_boundary_id")
+    dropped = getattr(explanation, f"{prefix}_dropped_boundary_id")
+    reason = getattr(explanation, f"{prefix}_dropped_reason")
+    if not conflict:
+        if any(item is not None for item in (retained, dropped, reason)):
+            raise TimeframeStateEngineError(
+                f"{prefix} non-crossing explanation contains conflict facts"
+            )
+        if (selected_upper, selected_lower) != (raw_upper, raw_lower):
+            raise TimeframeStateEngineError(
+                f"{prefix} non-crossing selected IDs must equal raw IDs"
+            )
+        return
+    if raw_upper is None or raw_lower is None or raw_upper == raw_lower:
+        raise TimeframeStateEngineError(
+            f"{prefix} crossing requires two distinct raw boundary IDs"
+        )
+    selected = tuple(
+        item for item in (selected_upper, selected_lower) if item is not None
+    )
+    if (
+        len(selected) != 1
+        or retained != selected[0]
+        or retained not in {raw_upper, raw_lower}
+        or dropped not in {raw_upper, raw_lower}
+        or dropped == retained
+        or reason != CROSSED_PAIR_OLDER_SIDE
+    ):
+        raise TimeframeStateEngineError(
+            f"{prefix} crossing resolution contradicts its raw and selected IDs"
+        )
+
+
+def _validate_raw_selection_ids(
+    state: TimeframeState, explanation: BoundarySelectionExplanation, prefix: str
+) -> None:
+    eligible_subjects = set(
+        getattr(explanation, f"{prefix}_eligible_subject_ids")
+    )
+    keys_by_state = {
+        item.lifecycle_state_id: item for item in explanation.stable_comparison_keys
+    }
+    state_boundaries = {
+        "upper": getattr(state, f"{prefix}_upper_boundary"),
+        "lower": getattr(state, f"{prefix}_lower_boundary"),
+    }
+    for side in ("upper", "lower"):
+        raw_state_id = getattr(explanation, f"raw_{prefix}_{side}_state_id")
+        raw_boundary_id = getattr(
+            explanation, f"raw_{prefix}_{side}_boundary_id"
+        )
+        if (raw_state_id is None) != (raw_boundary_id is None):
+            raise TimeframeStateEngineError(
+                f"raw {prefix} {side} state and boundary IDs must be paired"
+            )
+        if raw_state_id is None:
+            continue
+        key = keys_by_state.get(raw_state_id)
+        if key is None or key.subject_id not in eligible_subjects:
+            raise TimeframeStateEngineError(
+                f"raw {prefix} {side} lifecycle state is not eligible"
+            )
+        if raw_boundary_id != f"lifecycle-boundary-v1-{raw_state_id}":
+            raise TimeframeStateEngineError(
+                f"raw {prefix} {side} boundary ID contradicts lifecycle state ID"
+            )
+        selected = state_boundaries[side]
+        if selected is not None and (
+            selected.object_id != raw_boundary_id
+            or selected.provenance.source_object_id != raw_state_id
+        ):
+            raise TimeframeStateEngineError(
+                f"selected {prefix} {side} boundary contradicts its raw winner"
+            )
+
+
+def _validate_current_confirmed_pair(
+    state: TimeframeState, explanation: BoundarySelectionExplanation
+) -> None:
+    upper = state.confirmed_upper_boundary
+    lower = state.confirmed_lower_boundary
+    identity_fields = (
+        explanation.current_complete_pair_subject_ids,
+        explanation.current_complete_pair_state_ids,
+        explanation.current_complete_pair_boundary_ids,
+        explanation.current_pair_midpoints,
+    )
+    if upper is None or lower is None:
+        if any(identity_fields):
+            raise TimeframeStateEngineError(
+                "incomplete current Confirmed Pair must have empty identity fields"
+            )
+        return
+    boundaries = (upper, lower)
+    boundary_ids = tuple(item.object_id for item in boundaries)
+    state_ids = tuple(item.provenance.source_object_id for item in boundaries)
+    keys_by_state: dict[str, list[BoundarySelectionKey]] = {}
+    for key in explanation.stable_comparison_keys:
+        keys_by_state.setdefault(key.lifecycle_state_id, []).append(key)
+    if explanation.current_complete_pair_boundary_ids != boundary_ids:
+        raise TimeframeStateEngineError(
+            "current pair boundary IDs contradict confirmed state boundaries"
+        )
+    if explanation.current_complete_pair_state_ids != state_ids:
+        raise TimeframeStateEngineError(
+            "current pair lifecycle state IDs contradict boundary provenance"
+        )
+    if explanation.current_pair_midpoints != tuple(
+        _midpoint(item) for item in boundaries
+    ):
+        raise TimeframeStateEngineError(
+            "current pair midpoints contradict confirmed state boundaries"
+        )
+    keys: list[BoundarySelectionKey] = []
+    for state_id in state_ids:
+        matches = keys_by_state.get(state_id, [])
+        if len(matches) != 1:
+            raise TimeframeStateEngineError(
+                "each current pair lifecycle state ID must appear once in stable keys"
+            )
+        keys.append(matches[0])
+    subject_ids = tuple(item.subject_id for item in keys)
+    if explanation.current_complete_pair_subject_ids != subject_ids:
+        raise TimeframeStateEngineError(
+            "current pair subject IDs contradict stable comparison keys"
+        )
+    for boundary, subject_id in zip(boundaries, subject_ids):
+        parents = set(boundary.provenance.parent_object_ids)
+        matching_events = parents & set(explanation.selected_lifecycle_event_ids)
+        if subject_id not in parents or len(matching_events) != 1:
+            raise TimeframeStateEngineError(
+                "current pair boundary provenance lacks its subject or lifecycle event"
+            )
+
+
 def _validate_snapshot_views(
     state: TimeframeState,
     explanation: BoundarySelectionExplanation,
@@ -1175,6 +1483,7 @@ def _validate_snapshot_views(
     events: tuple[TimeframeStateEvent, ...],
     source_lifecycle_snapshot_id: str,
 ) -> None:
+    del source_lifecycle_snapshot_id
     if (
         explanation.target_symbol != config.symbol
         or explanation.target_timeframe is not config.target_timeframe
@@ -1198,6 +1507,82 @@ def _validate_snapshot_views(
         raise TimeframeStateEngineError("explanation selected boundaries contradict state")
     if explanation.final_direction is not state.direction:
         raise TimeframeStateEngineError("explanation final direction contradicts state")
+    if state.state_id != _expected_state_id(state):
+        raise TimeframeStateEngineError(
+            "state_id does not match the recomputed semantic identity"
+        )
+    latest = events[-1]
+    if (
+        state.origin_time != latest.event_confirm_time
+        or state.confirm_time != latest.event_confirm_time
+    ):
+        raise TimeframeStateEngineError(
+            "state OriginTime and ConfirmTime must equal the last event time"
+        )
+    _validate_crossing_view(explanation, "candidate")
+    _validate_crossing_view(explanation, "confirmed")
+    _validate_raw_selection_ids(state, explanation, "candidate")
+    _validate_raw_selection_ids(state, explanation, "confirmed")
+    _validate_current_confirmed_pair(state, explanation)
+    key_subject_ids = tuple(
+        sorted(item.subject_id for item in explanation.stable_comparison_keys)
+    )
+    if explanation.relevant_subject_ids != key_subject_ids:
+        raise TimeframeStateEngineError(
+            "relevant subjects must exactly equal canonical stable-key subjects"
+        )
+    relevant = set(explanation.relevant_subject_ids)
+    candidate_eligible = set(explanation.candidate_eligible_subject_ids)
+    confirmed_eligible = set(explanation.confirmed_eligible_subject_ids)
+    excluded = set(explanation.excluded_broken_ids) | set(
+        explanation.excluded_retired_ids
+    )
+    if (
+        not candidate_eligible.issubset(relevant)
+        or not confirmed_eligible.issubset(candidate_eligible)
+        or excluded & candidate_eligible
+    ):
+        raise TimeframeStateEngineError(
+            "eligible and excluded explanation sets are incoherent"
+        )
+    selected_boundaries = tuple(
+        item
+        for item in (
+            state.candidate_upper_boundary,
+            state.candidate_lower_boundary,
+            state.confirmed_upper_boundary,
+            state.confirmed_lower_boundary,
+        )
+        if item is not None
+    )
+    keys_by_state = {
+        item.lifecycle_state_id: item for item in explanation.stable_comparison_keys
+    }
+    expected_state_ids: set[str] = set()
+    expected_event_ids: set[str] = set()
+    for boundary in selected_boundaries:
+        lifecycle_state_id = boundary.provenance.source_object_id
+        key = keys_by_state.get(lifecycle_state_id)
+        if key is None:
+            raise TimeframeStateEngineError(
+                "selected boundary lifecycle state is absent from stable keys"
+            )
+        parents = set(boundary.provenance.parent_object_ids)
+        event_parents = parents - {key.subject_id}
+        if key.subject_id not in parents or len(event_parents) != 1:
+            raise TimeframeStateEngineError(
+                "selected boundary provenance must contain its subject and one lifecycle event"
+            )
+        expected_state_ids.add(lifecycle_state_id)
+        expected_event_ids.update(event_parents)
+    if explanation.selected_lifecycle_state_ids != tuple(sorted(expected_state_ids)):
+        raise TimeframeStateEngineError(
+            "selected lifecycle state IDs are not the exact selected-boundary set"
+        )
+    if explanation.selected_lifecycle_event_ids != tuple(sorted(expected_event_ids)):
+        raise TimeframeStateEngineError(
+            "selected lifecycle event IDs are not the exact selected-boundary set"
+        )
     report_selected = (
         report.selected_candidate_upper_id,
         report.selected_candidate_lower_id,
@@ -1229,7 +1614,26 @@ def _validate_snapshot_views(
         or state.scale != config.target_scale
     ):
         raise TimeframeStateEngineError("state target context contradicts config")
-    latest = events[-1]
+    if (
+        report.upper_candidate_count + report.lower_candidate_count
+        != report.candidate_eligible_count
+    ):
+        raise TimeframeStateEngineError("candidate side counts contradict eligible count")
+    if (
+        report.upper_confirmed_count + report.lower_confirmed_count
+        != report.confirmed_eligible_count
+    ):
+        raise TimeframeStateEngineError("confirmed side counts contradict eligible count")
+    if report.complete_candidate_pair != (
+        state.candidate_upper_boundary is not None
+        and state.candidate_lower_boundary is not None
+    ):
+        raise TimeframeStateEngineError("report complete Candidate Pair contradicts state")
+    if report.complete_confirmed_pair != (
+        state.confirmed_upper_boundary is not None
+        and state.confirmed_lower_boundary is not None
+    ):
+        raise TimeframeStateEngineError("report complete Confirmed Pair contradicts state")
     if latest.current_direction is not state.direction:
         raise TimeframeStateEngineError(
             "last event current_direction contradicts state"
@@ -1279,9 +1683,7 @@ def _validate_snapshot_views(
             != "msa.research.timeframe_state.engine"
             or event.provenance.source_version != config.engine_version
             or event.provenance.policy_id != config.policy_id
-            or not required_event_parents.issubset(
-                event.provenance.parent_object_ids
-            )
+            or set(event.provenance.parent_object_ids) != required_event_parents
         ):
             raise TimeframeStateEngineError("event provenance is inconsistent")
     required_state_parents = {
@@ -1297,7 +1699,7 @@ def _validate_snapshot_views(
         != "msa.research.timeframe_state.engine"
         or state.provenance.source_version != config.engine_version
         or state.provenance.policy_id != config.policy_id
-        or not required_state_parents.issubset(state.provenance.parent_object_ids)
+        or set(state.provenance.parent_object_ids) != required_state_parents
     ):
         raise TimeframeStateEngineError("state provenance is inconsistent")
 
@@ -1376,6 +1778,20 @@ class TimeframeStateSnapshot:
             self.events,
             self.source_lifecycle_snapshot_id,
         )
+        expected_snapshot_id = _snapshot_id(
+            config=self.config_snapshot.to_dict(),
+            source_lifecycle_snapshot_id=self.source_lifecycle_snapshot_id,
+            as_of_time=as_of,
+            state=self.state.to_dict(),
+            explanation=self.explanation.to_dict(),
+            events=tuple(item.to_dict() for item in self.events),
+            report=self.report.to_dict(),
+            schema_version=self.schema_version,
+        )
+        if self.snapshot_id != expected_snapshot_id:
+            raise TimeframeStateEngineError(
+                "snapshot_id does not match the recomputed semantic identity"
+            )
         object.__setattr__(self, "as_of_time", as_of)
 
     def to_dict(self) -> dict[str, object]:
@@ -1428,6 +1844,16 @@ def _state_without_as_of(state: TimeframeState) -> dict[str, object]:
     return payload
 
 
+def _semantic_diff(
+    previous: TimeframeState, current: TimeframeState
+) -> tuple[str, ...]:
+    return tuple(
+        field_name
+        for field_name in SEMANTIC_FIELDS
+        if getattr(previous, field_name) != getattr(current, field_name)
+    )
+
+
 @dataclass(frozen=True, slots=True)
 class TimeframeStateHistory:
     events: tuple[TimeframeStateEvent, ...]
@@ -1474,14 +1900,82 @@ class TimeframeStateHistory:
                 "history snapshot configurations must be identical"
             )
         previous: TimeframeStateSnapshot | None = None
+        last_complete_subject_ids: tuple[str, ...] = ()
+        last_complete_state_ids: tuple[str, ...] = ()
+        last_complete_boundary_ids: tuple[str, ...] = ()
+        last_complete_midpoints: tuple[Decimal, ...] = ()
+        previous_current_subject_ids: tuple[str, ...] = ()
+        previous_current_midpoints: tuple[Decimal, ...] = ()
+        previous_direction = Direction.UNKNOWN
         for snapshot in self.snapshots:
             if snapshot.events != self.events[: len(snapshot.events)]:
                 raise TimeframeStateEngineError(
                     "each history snapshot must contain the exact event prefix"
                 )
-            if previous is not None:
+            explanation = snapshot.explanation
+            if (
+                explanation.previous_complete_pair_subject_ids
+                != last_complete_subject_ids
+                or explanation.previous_complete_pair_state_ids
+                != last_complete_state_ids
+                or explanation.previous_complete_pair_boundary_ids
+                != last_complete_boundary_ids
+                or explanation.previous_pair_midpoints != last_complete_midpoints
+            ):
+                raise TimeframeStateEngineError(
+                    "explanation previous complete pair contradicts history"
+                )
+            expected_direction = _direction_transition(
+                previous_direction,
+                last_complete_subject_ids,
+                last_complete_midpoints,
+                previous_current_subject_ids,
+                previous_current_midpoints,
+                explanation.current_complete_pair_subject_ids,
+                explanation.current_pair_midpoints,
+            )
+            if (
+                explanation.previous_direction is not previous_direction
+                or explanation.final_direction is not expected_direction[0]
+                or explanation.raw_direction is not expected_direction[1]
+                or explanation.pair_position_changed != expected_direction[2]
+                or explanation.direction_rationale != expected_direction[3]
+            ):
+                raise TimeframeStateEngineError(
+                    "explanation direction transition contradicts history"
+                )
+            if previous is None:
+                if len(snapshot.events) != 1:
+                    raise TimeframeStateEngineError(
+                        "first snapshot must contain exactly one INITIALIZED event"
+                    )
+                initialized = snapshot.events[0]
+                if (
+                    initialized.event_type is not TimeframeStateEventType.INITIALIZED
+                    or initialized.event_confirm_time != snapshot.as_of_time
+                    or initialized.first_seen_time != snapshot.as_of_time
+                    or initialized.source_lifecycle_snapshot_id
+                    != snapshot.source_lifecycle_snapshot_id
+                    or initialized.changed_fields != SEMANTIC_FIELDS
+                    or snapshot.state.origin_time != snapshot.as_of_time
+                    or snapshot.state.confirm_time != snapshot.as_of_time
+                ):
+                    raise TimeframeStateEngineError(
+                        "first snapshot INITIALIZED facts are inconsistent"
+                    )
+            else:
+                if len(snapshot.events) < len(previous.events):
+                    raise TimeframeStateEngineError(
+                        "history event prefixes cannot shrink"
+                    )
                 new_events = snapshot.events[len(previous.events) :]
-                if not new_events and _state_without_as_of(snapshot.state) != _state_without_as_of(previous.state):
+                if len(new_events) not in {0, 1}:
+                    raise TimeframeStateEngineError(
+                        "adjacent snapshots may append at most one event"
+                    )
+                if not new_events and _state_without_as_of(
+                    snapshot.state
+                ) != _state_without_as_of(previous.state):
                     raise TimeframeStateEngineError(
                         "state facts cannot change without a new timeframe-state event"
                     )
@@ -1493,6 +1987,56 @@ class TimeframeStateHistory:
                     raise TimeframeStateEngineError(
                         "state_id cannot change without a new timeframe-state event"
                     )
+                if new_events:
+                    event = new_events[0]
+                    changed = _semantic_diff(previous.state, snapshot.state)
+                    if (
+                        event is not snapshot.events[-1]
+                        or event.event_confirm_time != snapshot.as_of_time
+                        or event.first_seen_time != snapshot.as_of_time
+                        or event.source_lifecycle_snapshot_id
+                        != snapshot.source_lifecycle_snapshot_id
+                        or event.previous_state_id != previous.state.state_id
+                        or event.current_state_id != snapshot.state.state_id
+                        or event.previous_direction is not previous.state.direction
+                        or event.current_direction is not snapshot.state.direction
+                        or event.changed_fields != changed
+                        or snapshot.state.origin_time != event.event_confirm_time
+                        or snapshot.state.confirm_time != event.event_confirm_time
+                    ):
+                        raise TimeframeStateEngineError(
+                            "adjacent snapshot event does not match the exact semantic diff"
+                        )
+            if snapshot.report.lifecycle_snapshot_count < (
+                0 if previous is None else previous.report.lifecycle_snapshot_count
+            ):
+                raise TimeframeStateEngineError(
+                    "lifecycle_snapshot_count must be nondecreasing"
+                )
+            if (
+                previous is not None
+                and snapshot.source_lifecycle_snapshot_id
+                == previous.source_lifecycle_snapshot_id
+                and snapshot.report.lifecycle_snapshot_count
+                != previous.report.lifecycle_snapshot_count
+            ):
+                raise TimeframeStateEngineError(
+                    "extra AsOf observations must preserve lifecycle_snapshot_count"
+                )
+            if explanation.current_complete_pair_subject_ids:
+                last_complete_subject_ids = (
+                    explanation.current_complete_pair_subject_ids
+                )
+                last_complete_state_ids = explanation.current_complete_pair_state_ids
+                last_complete_boundary_ids = (
+                    explanation.current_complete_pair_boundary_ids
+                )
+                last_complete_midpoints = explanation.current_pair_midpoints
+            previous_current_subject_ids = (
+                explanation.current_complete_pair_subject_ids
+            )
+            previous_current_midpoints = explanation.current_pair_midpoints
+            previous_direction = snapshot.state.direction
             previous = snapshot
         if not isinstance(self.final_snapshot, TimeframeStateSnapshot):
             raise TimeframeStateEngineError(

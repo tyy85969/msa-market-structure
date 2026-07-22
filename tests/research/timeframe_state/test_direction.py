@@ -1,5 +1,7 @@
 from decimal import Decimal
 
+import pytest
+
 from msa.domain import BoundarySide, Direction
 from tests.research.timeframe_state.fixtures import (
     START,
@@ -14,6 +16,7 @@ from tests.research.timeframe_state.fixtures import (
     timeframe_engine,
     timeframe_input,
 )
+from msa.research.timeframe_state.contracts import _direction_transition
 
 
 def directions(data) -> list[Direction]:
@@ -112,6 +115,83 @@ def test_pair_loss_after_complete_pair_is_turning() -> None:
     assert history.snapshots[-2].state.direction is Direction.RANGE
     assert history.final_snapshot.state.direction is Direction.TURNING
     assert history.final_snapshot.state.confirmed_upper_boundary is None
+    assert history.final_snapshot.explanation.pair_position_changed is True
+
+
+def test_persistent_missing_pair_keeps_turning_without_repeated_change() -> None:
+    data = timeframe_input(
+        base_pair(),
+        (
+            bar(0),
+            bar(1, high="113", low="100", close="112"),
+            bar(2, high="112", low="100", close="110"),
+        ),
+    )
+    history = timeframe_engine().build_batch(data)
+    first_loss, persistent = history.snapshots[-2:]
+    assert first_loss.state.direction is Direction.TURNING
+    assert first_loss.explanation.pair_position_changed is True
+    assert persistent.state.direction is Direction.TURNING
+    assert persistent.explanation.pair_position_changed is False
+
+
+@pytest.mark.parametrize(
+    ("current_midpoints", "expected"),
+    [
+        ((Decimal("100"), Decimal("80")), Direction.RANGE),
+        ((Decimal("101"), Decimal("81")), Direction.UP),
+        ((Decimal("99"), Decimal("79")), Direction.DOWN),
+        ((Decimal("101"), Decimal("79")), Direction.RANGE),
+    ],
+)
+def test_rebuild_compares_with_last_complete_even_after_missing_pair(
+    current_midpoints: tuple[Decimal, Decimal], expected: Direction
+) -> None:
+    result = _direction_transition(
+        Direction.TURNING,
+        ("upper-old", "lower-old"),
+        (Decimal("100"), Decimal("80")),
+        (),
+        (),
+        ("upper-old", "lower-old"),
+        current_midpoints,
+    )
+    assert result[0] is expected
+    assert result[1] is expected
+    assert result[2] is True
+
+
+def test_crossing_loss_then_old_compatible_pair_rebuilds_as_range() -> None:
+    subjects = (
+        subject("old-upper", BoundarySide.UPPER, "130", "131"),
+        subject("old-lower", BoundarySide.LOWER, "90", "91"),
+        subject(
+            "new-crossing-lower",
+            BoundarySide.LOWER,
+            "140",
+            "141",
+            confirm_time=T1,
+        ),
+    )
+    data = timeframe_input(
+        subjects,
+        (
+            bar(0, high="131", low="90", close="100"),
+            bar(1, high="141", low="90", close="140"),
+            bar(2, high="131", low="100", close="100"),
+        ),
+        break_buffer=Decimal("30"),
+    )
+    history = timeframe_engine().build_batch(data)
+    loss, rebuilt = history.snapshots[-2:]
+    assert loss.explanation.confirmed_crossing_conflict is True
+    assert loss.state.direction is Direction.TURNING
+    assert rebuilt.state.direction is Direction.RANGE
+    assert rebuilt.explanation.current_complete_pair_subject_ids == (
+        "old-upper",
+        "old-lower",
+    )
+    assert rebuilt.explanation.pair_position_changed is True
 
 
 def test_pair_incomplete_before_any_complete_pair_remains_unknown() -> None:

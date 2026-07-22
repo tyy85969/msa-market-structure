@@ -1,4 +1,4 @@
-from dataclasses import FrozenInstanceError, fields
+from dataclasses import FrozenInstanceError, fields, replace
 
 import pytest
 
@@ -7,6 +7,7 @@ from msa.research.timeframe_state import (
     BoundarySelectionKey,
     TimeframeStateEvent,
     TimeframeStateHistory,
+    TimeframeStateEngineError,
     TimeframeStateReport,
     TimeframeStateSerializationError,
     TimeframeStateSnapshot,
@@ -130,3 +131,58 @@ def test_event_chain_break_is_rejected_on_deserialization() -> None:
 def test_repeated_serialization_is_deterministic() -> None:
     history = timeframe_engine().build_batch(timeframe_input(base_pair(), (bar(0),)))
     assert history.to_dict() == history.to_dict()
+
+
+def test_direct_event_rejects_arbitrary_well_formed_hash() -> None:
+    event = timeframe_engine().build_batch(direction_sequence_input()).events[-1]
+    forged_id = event.event_id.rsplit("-", 1)[0] + "-" + "a" * 64
+    forged_provenance = replace(event.provenance, source_object_id=forged_id)
+    with pytest.raises(TimeframeStateEngineError, match="recomputed"):
+        replace(event, event_id=forged_id, provenance=forged_provenance)
+
+
+def test_direct_snapshot_rejects_arbitrary_well_formed_hash() -> None:
+    snapshot = timeframe_engine().build_batch(direction_sequence_input()).final_snapshot
+    forged_id = "timeframe-state-snapshot-v1-" + "a" * 64
+    with pytest.raises(TimeframeStateEngineError, match="snapshot_id"):
+        replace(snapshot, snapshot_id=forged_id)
+
+
+def test_direct_snapshot_rejects_forged_nested_state_id() -> None:
+    snapshot = timeframe_engine().build_batch(direction_sequence_input()).final_snapshot
+    forged_state_id = "timeframe-state-v1-" + "a" * 64
+    forged_state = replace(
+        snapshot.state,
+        state_id=forged_state_id,
+        provenance=replace(
+            snapshot.state.provenance, source_object_id=forged_state_id
+        ),
+    )
+    with pytest.raises(TimeframeStateEngineError, match="state_id"):
+        replace(snapshot, state=forged_state)
+
+
+@pytest.mark.parametrize("target", ["state", "event", "snapshot"])
+def test_serialized_identity_substitution_fails_closed(target: str) -> None:
+    payload = timeframe_engine().build_batch(direction_sequence_input()).final_snapshot.to_dict()
+    if target == "state":
+        payload["state"]["state_id"] = "timeframe-state-v1-" + "b" * 64
+        payload["state"]["provenance"]["source_object_id"] = payload["state"]["state_id"]
+    elif target == "event":
+        payload["events"][-1]["event_id"] = (
+            payload["events"][-1]["event_id"].rsplit("-", 1)[0] + "-" + "b" * 64
+        )
+        payload["events"][-1]["provenance"]["source_object_id"] = payload["events"][-1]["event_id"]
+    else:
+        payload["snapshot_id"] = "timeframe-state-snapshot-v1-" + "b" * 64
+    with pytest.raises(TimeframeStateSerializationError):
+        TimeframeStateSnapshot.from_dict(payload)
+
+
+@pytest.mark.parametrize("target", ["state", "event"])
+def test_serialized_extra_provenance_parent_fails_closed(target: str) -> None:
+    payload = timeframe_engine().build_batch(direction_sequence_input()).final_snapshot.to_dict()
+    item = payload["state"] if target == "state" else payload["events"][-1]
+    item["provenance"]["parent_object_ids"].append("forged-extra-parent")
+    with pytest.raises(TimeframeStateSerializationError, match="provenance"):
+        TimeframeStateSnapshot.from_dict(payload)

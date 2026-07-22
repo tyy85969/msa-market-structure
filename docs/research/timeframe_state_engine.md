@@ -158,10 +158,19 @@ structure-state transition, not a buy/sell instruction.
 
 ## 24. Pair loss and rebuild
 
-Losing a pair after any complete pair yields TURNING; continued incompleteness
-keeps it without repeated Direction changes. If no pair ever formed, an
-incomplete pair stays UNKNOWN. A rebuilt pair compares with the most recent
-historical complete pair, not an empty intermediate state.
+Direction retains two distinct causal facts: the most recent historical
+complete Confirmed Pair and the complete pair actually present at the preceding
+LifecycleSnapshot. The first loss after a complete pair yields `TURNING` with
+`pair_position_changed=true`. Continued incompleteness preserves the current
+Direction with `pair_position_changed=false`; it does not emit repeated
+Direction changes. If no pair ever formed, an incomplete pair stays `UNKNOWN`.
+
+A pair appearing after an incomplete preceding snapshot is always a rebuild,
+even when it restores the same subjects and Decimal midpoints. It compares with
+the most recent historical complete pair: both-midpoint rises yield `UP`, both
+falls yield `DOWN`, and same/equal/mixed movement yields raw and final `RANGE`.
+A rebuild from `TURNING` resolves directly to that raw result and records
+`pair_position_changed=true`.
 
 ## 25. Semantic state fields
 
@@ -205,6 +214,8 @@ source lifecycle events, and direct prior timeframe event. State provenance
 references the source snapshot that formed the semantic state, selected
 lifecycle states, their latest lifecycle events, and the current timeframe
 event. Parent IDs are finite and canonical; complete history is never copied.
+Validation requires these parent sets exactly, so both missing and injected
+parents fail closed.
 
 ## 31. Selection explanation
 
@@ -213,6 +224,16 @@ crossing resolution, selected boundaries, all stable keys, previous/current
 pair identities and midpoints, raw/final Direction, and a fixed rationale. It
 contains no score, weight, trade bias, or recommendation and is contract-checked
 against State and Report.
+The current complete-pair identity is reconstructed from the confirmed state
+boundaries, their lifecycle provenance, and the stable comparison keys.
+Candidate and Confirmed crossing explanations are validated independently
+against their raw and selected IDs; validation never performs fallback search.
+
+State, Event, and Snapshot IDs are recomputed by the same private canonical
+identity functions used during generation. History validation independently
+replays adjacent six-field semantic diffs and the Direction transition, permits
+zero or one new event per snapshot, and rejects coherent-looking substituted
+hashes or ledgers.
 
 ## 32. As-Of
 

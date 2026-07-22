@@ -1,11 +1,15 @@
 from decimal import Decimal
+from dataclasses import replace
 from itertools import permutations
 
 import pytest
 
 from msa.data import Timeframe
 from msa.domain import BoundarySide, LifecycleState, MarketRole, ScaleDescriptor
-from msa.research.timeframe_state import CROSSED_PAIR_OLDER_SIDE
+from msa.research.timeframe_state import (
+    CROSSED_PAIR_OLDER_SIDE,
+    TimeframeStateEngineError,
+)
 from tests.research.timeframe_state.fixtures import (
     PRIMARY,
     START,
@@ -220,3 +224,112 @@ def test_subject_input_permutations_do_not_change_output() -> None:
         assert timeframe_engine().build_batch(
             timeframe_input(tuple(order), (bar(0, high="121", low="90"),))
         ).to_dict() == baseline
+
+
+def test_incomplete_confirmed_pair_rejects_nonempty_current_pair_identity() -> None:
+    upper = subject("upper", BoundarySide.UPPER, "110", "111")
+    snapshot = timeframe_engine().build_batch(
+        timeframe_input((upper,), (bar(0, high="110", low="100"),))
+    ).final_snapshot
+    forged = replace(
+        snapshot.explanation,
+        current_complete_pair_subject_ids=("upper", "missing-lower"),
+        current_complete_pair_state_ids=("state-upper", "state-lower"),
+        current_complete_pair_boundary_ids=("boundary-upper", "boundary-lower"),
+        current_pair_midpoints=(Decimal("110.5"), Decimal("90.5")),
+    )
+    with pytest.raises(TimeframeStateEngineError, match="incomplete current"):
+        replace(snapshot, explanation=forged)
+
+
+def test_current_pair_subject_must_match_stable_key_subject() -> None:
+    snapshot = timeframe_engine().build_batch(
+        timeframe_input(base_pair(), (bar(0),))
+    ).final_snapshot
+    forged = replace(
+        snapshot.explanation,
+        current_complete_pair_subject_ids=("wrong-upper", "lower-old"),
+    )
+    with pytest.raises(TimeframeStateEngineError, match="subject IDs"):
+        replace(snapshot, explanation=forged)
+
+
+def test_selected_lifecycle_sets_must_be_exact_not_supersets() -> None:
+    snapshot = timeframe_engine().build_batch(
+        timeframe_input(base_pair(), (bar(0),))
+    ).final_snapshot
+    forged = replace(
+        snapshot.explanation,
+        selected_lifecycle_state_ids=(
+            *snapshot.explanation.selected_lifecycle_state_ids,
+            "extra-state",
+        ),
+    )
+    with pytest.raises(TimeframeStateEngineError, match="exact selected-boundary"):
+        replace(snapshot, explanation=forged)
+
+
+def test_non_crossing_selected_ids_must_equal_raw_ids() -> None:
+    snapshot = timeframe_engine().build_batch(
+        timeframe_input(base_pair(), (bar(0),))
+    ).final_snapshot
+    forged = replace(
+        snapshot.explanation,
+        raw_confirmed_upper_boundary_id="different-raw-upper",
+    )
+    with pytest.raises(TimeframeStateEngineError, match="selected IDs must equal raw"):
+        replace(snapshot, explanation=forged)
+
+
+def test_raw_boundary_and_lifecycle_state_ids_must_correspond() -> None:
+    snapshot = timeframe_engine().build_batch(
+        timeframe_input(base_pair(), (bar(0),))
+    ).final_snapshot
+    forged = replace(
+        snapshot.explanation,
+        raw_confirmed_upper_state_id=(
+            snapshot.explanation.raw_confirmed_lower_state_id
+        ),
+    )
+    with pytest.raises(TimeframeStateEngineError, match="boundary ID contradicts"):
+        replace(snapshot, explanation=forged)
+
+
+def test_crossing_retained_and_dropped_ids_must_match_raw_pair() -> None:
+    subjects = (
+        subject("raw-upper", BoundarySide.UPPER, "110", "111"),
+        subject("raw-lower", BoundarySide.LOWER, "120", "121"),
+    )
+    snapshot = timeframe_engine().build_batch(
+        timeframe_input(
+            subjects,
+            (bar(0, high="121", low="110", close="115"),),
+            break_buffer=Decimal("100"),
+        )
+    ).final_snapshot
+    forged = replace(
+        snapshot.explanation,
+        confirmed_retained_boundary_id="not-selected",
+    )
+    with pytest.raises(TimeframeStateEngineError, match="crossing resolution"):
+        replace(snapshot, explanation=forged)
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("relevant_subject_ids", ("not-in-stable-keys",)),
+        ("candidate_eligible_subject_ids", ("not-relevant",)),
+        ("confirmed_eligible_subject_ids", ("not-candidate",)),
+        ("excluded_broken_ids", ("upper-old",)),
+    ],
+)
+def test_explanation_subject_sets_fail_closed_when_contradictory(
+    field: str, value: tuple[str, ...]
+) -> None:
+    snapshot = timeframe_engine().build_batch(
+        timeframe_input(base_pair(), (bar(0),))
+    ).final_snapshot
+    forged = replace(snapshot.explanation, **{field: value})
+    with pytest.raises(TimeframeStateEngineError):
+        replace(snapshot, explanation=forged)
