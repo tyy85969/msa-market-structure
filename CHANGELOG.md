@@ -46,6 +46,9 @@
 - Added the stable `Direction` domain enum.
 - Revised `TimeframeState` to carry separate Candidate and Confirmed boundary pairs.
 - Introduced `TimeframeState` schema version 2 with no silent v1 migration.
+- Added the causal C-006B per-timeframe state engine over immutable lifecycle histories.
+- Added LATEST_CAUSAL boundary selection, crossing explanations, Direction transitions, and deterministic state/event ledgers.
+- Added timeframe-state Batch, As-Of, replay parity, strict serialization, input-order invariance, and no-lookahead coverage.
 
 ### Added
 - 初始化 MSA 项目仓库。
