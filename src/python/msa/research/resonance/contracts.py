@@ -28,6 +28,7 @@ from msa.domain import (
     ProvenanceRef,
     ScaleDescriptor,
     StructureSourceType,
+    TimeframeState,
 )
 from msa.research.lifecycle import LifecycleHistory
 from msa.research.timeframe_state import TimeframeStateHistory
@@ -38,10 +39,19 @@ from .errors import (
     ResonanceFrameInputError,
     ResonanceFrameSerializationError,
 )
-from .identity import _evidence_id, _frame_id
+from .identity import _context_state_id, _evidence_id, _frame_id, _reference_id
 
 
 SCHEMA_VERSION = 1
+
+_ASSEMBLER_MODULE = "msa.research.resonance.assembler"
+_LIFECYCLE_MODULE = "msa.research.lifecycle.engine"
+_REPORT_ASSUMPTIONS = (
+    "LifecycleSnapshot states are the complete evidence universe",
+    "TimeframeState supplies direction and exact lifecycle alignment only",
+    "reference price is completed CanonicalBar.close visible by available_time",
+    "C-007A performs no clustering, score, ranking, or ActiveBox selection",
+)
 
 _BAR_FIELDS = {
     "symbol", "timeframe", "timestamp", "end_time", "open", "high", "low",
@@ -163,6 +173,30 @@ def _parse_time(field_name: str, value: object) -> datetime:
 
 def _parse_optional_time(field_name: str, value: object) -> datetime | None:
     return None if value is None else _parse_time(field_name, value)
+
+
+def _elapsed_seconds(delta: timedelta) -> Decimal:
+    total_microseconds = (
+        delta.days * 86_400_000_000
+        + delta.seconds * 1_000_000
+        + delta.microseconds
+    )
+    return Decimal(total_microseconds) / Decimal("1000000")
+
+
+def _engine_id_from_notes(
+    provenance: ProvenanceRef, *, object_name: str, error_type: type[Exception]
+) -> str:
+    values = tuple(
+        note.removeprefix("engine_id=")
+        for note in provenance.notes
+        if note.startswith("engine_id=")
+    )
+    if len(values) != 1 or not values[0].strip():
+        raise error_type(
+            f"{object_name} provenance must contain exactly one engine_id note"
+        )
+    return values[0]
 
 
 def _decimal(
@@ -621,25 +655,13 @@ class ResonanceFrameConfig:
 @dataclass(frozen=True, slots=True)
 class ReferencePriceSnapshot:
     reference_id: str
-    symbol: str
-    timeframe: Timeframe
-    price: Decimal
-    bar_timestamp: datetime
-    bar_end_time: datetime
-    available_time: datetime
-    source: str
-    source_timezone: str
+    canonical_bar: CanonicalBar
     schema_version: int = SCHEMA_VERSION
 
     def __post_init__(self) -> None:
         name = type(self).__name__
         _schema(self.schema_version, name, ResonanceFrameEngineError)
-        for field_name in ("reference_id", "symbol", "source", "source_timezone"):
-            _text(
-                f"{name}.{field_name}",
-                getattr(self, field_name),
-                ResonanceFrameEngineError,
-            )
+        _text(f"{name}.reference_id", self.reference_id, ResonanceFrameEngineError)
         prefix = "resonance-reference-v1-"
         digest = self.reference_id.removeprefix(prefix)
         if (
@@ -650,67 +672,69 @@ class ReferencePriceSnapshot:
             raise ResonanceFrameEngineError(
                 "ReferencePriceSnapshot.reference_id must be a canonical SHA-256 identity"
             )
-        if not isinstance(self.timeframe, Timeframe):
+        if not isinstance(self.canonical_bar, CanonicalBar):
             raise ResonanceFrameEngineError(
-                "ReferencePriceSnapshot.timeframe must be a Timeframe"
+                "ReferencePriceSnapshot.canonical_bar must be a CanonicalBar"
             )
-        _decimal(f"{name}.price", self.price, ResonanceFrameEngineError)
-        timestamp = _time(
-            f"{name}.bar_timestamp", self.bar_timestamp, ResonanceFrameEngineError
-        )
-        end_time = _time(
-            f"{name}.bar_end_time", self.bar_end_time, ResonanceFrameEngineError
-        )
-        available = _time(
-            f"{name}.available_time", self.available_time, ResonanceFrameEngineError
-        )
-        if not timestamp < end_time <= available:
+        if not self.canonical_bar.is_complete:
             raise ResonanceFrameEngineError(
-                "reference bar requires timestamp < end_time <= available_time"
+                "ReferencePriceSnapshot.canonical_bar must be complete"
             )
-        object.__setattr__(self, "bar_timestamp", timestamp)
-        object.__setattr__(self, "bar_end_time", end_time)
-        object.__setattr__(self, "available_time", available)
+        expected_id = _reference_id(
+            self.canonical_bar.to_dict(), schema_version=self.schema_version
+        )
+        if self.reference_id != expected_id:
+            raise ResonanceFrameEngineError(
+                "reference_id does not match the complete CanonicalBar payload"
+            )
+
+    @property
+    def symbol(self) -> str:
+        return self.canonical_bar.symbol
+
+    @property
+    def timeframe(self) -> Timeframe:
+        return self.canonical_bar.timeframe
+
+    @property
+    def price(self) -> Decimal:
+        return self.canonical_bar.close
+
+    @property
+    def bar_timestamp(self) -> datetime:
+        return self.canonical_bar.timestamp
+
+    @property
+    def bar_end_time(self) -> datetime:
+        return self.canonical_bar.end_time
+
+    @property
+    def available_time(self) -> datetime:
+        return self.canonical_bar.available_time
+
+    @property
+    def source(self) -> str:
+        return self.canonical_bar.source
+
+    @property
+    def source_timezone(self) -> str:
+        return self.canonical_bar.source_timezone
 
     def to_dict(self) -> dict[str, object]:
         return {
             "schema_version": self.schema_version,
             "reference_id": self.reference_id,
-            "symbol": self.symbol,
-            "timeframe": self.timeframe.value,
-            "price": str(self.price),
-            "bar_timestamp": self.bar_timestamp.isoformat(),
-            "bar_end_time": self.bar_end_time.isoformat(),
-            "available_time": self.available_time.isoformat(),
-            "source": self.source,
-            "source_timezone": self.source_timezone,
+            "canonical_bar": self.canonical_bar.to_dict(),
         }
 
     @classmethod
     def from_dict(cls, payload: Mapping[str, Any]) -> ReferencePriceSnapshot:
-        fields = {
-            "reference_id",
-            "symbol",
-            "timeframe",
-            "price",
-            "bar_timestamp",
-            "bar_end_time",
-            "available_time",
-            "source",
-            "source_timezone",
-        }
+        fields = {"reference_id", "canonical_bar"}
         data = _exact_payload(payload, cls.__name__, fields)
         try:
             return cls(
                 reference_id=data["reference_id"],
-                symbol=data["symbol"],
-                timeframe=Timeframe(data["timeframe"]),
-                price=_parse_decimal("price", data["price"]),
-                bar_timestamp=_parse_time("bar_timestamp", data["bar_timestamp"]),
-                bar_end_time=_parse_time("bar_end_time", data["bar_end_time"]),
-                available_time=_parse_time("available_time", data["available_time"]),
-                source=data["source"],
-                source_timezone=data["source_timezone"],
+                canonical_bar=_bar_from_dict(data["canonical_bar"]),
                 schema_version=data["schema_version"],
             )
         except ResonanceFrameSerializationError:
@@ -723,13 +747,11 @@ class ReferencePriceSnapshot:
 
 @dataclass(frozen=True, slots=True)
 class ResonanceContextState:
+    context_state_id: str
     context: ResonanceContext
     timeframe_snapshot_id: str
     timeframe_snapshot_as_of_time: datetime
-    timeframe_state_id: str
-    direction: Direction
-    state_confirm_time: datetime
-    state_origin_time: datetime
+    state: TimeframeState
     source_lifecycle_snapshot_id: str
     schema_version: int = SCHEMA_VERSION
 
@@ -741,8 +763,8 @@ class ResonanceContextState:
                 "ResonanceContextState.context must be a ResonanceContext"
             )
         for field_name in (
+            "context_state_id",
             "timeframe_snapshot_id",
-            "timeframe_state_id",
             "source_lifecycle_snapshot_id",
         ):
             _text(
@@ -755,70 +777,83 @@ class ResonanceContextState:
             self.timeframe_snapshot_as_of_time,
             ResonanceFrameEngineError,
         )
-        origin = _time(
-            f"{name}.state_origin_time",
-            self.state_origin_time,
-            ResonanceFrameEngineError,
-        )
-        confirm = _time(
-            f"{name}.state_confirm_time",
-            self.state_confirm_time,
-            ResonanceFrameEngineError,
-        )
-        if not isinstance(self.direction, Direction):
+        if not isinstance(self.state, TimeframeState):
             raise ResonanceFrameEngineError(
-                "ResonanceContextState.direction must be a Direction"
+                "ResonanceContextState.state must be a TimeframeState"
             )
-        if origin > confirm or confirm > snapshot_time:
+        if self.state.as_of_time != snapshot_time:
             raise ResonanceFrameEngineError(
-                "context state requires origin_time <= confirm_time <= snapshot as_of"
+                "context TimeframeState.as_of_time must equal snapshot as_of_time"
+            )
+        if (
+            self.state.timeframe is not self.context.timeframe
+            or self.state.scale != self.context.scale
+        ):
+            raise ResonanceFrameEngineError(
+                "context must equal TimeframeState timeframe and scale"
+            )
+        expected_id = _context_state_id(
+            context=self.context.to_dict(),
+            timeframe_snapshot_id=self.timeframe_snapshot_id,
+            timeframe_snapshot_as_of_time=snapshot_time.isoformat(),
+            state=self.state.to_dict(),
+            source_lifecycle_snapshot_id=self.source_lifecycle_snapshot_id,
+            schema_version=self.schema_version,
+        )
+        if self.context_state_id != expected_id:
+            raise ResonanceFrameEngineError(
+                "context_state_id does not match the complete TimeframeState payload"
             )
         object.__setattr__(self, "timeframe_snapshot_as_of_time", snapshot_time)
-        object.__setattr__(self, "state_origin_time", origin)
-        object.__setattr__(self, "state_confirm_time", confirm)
+
+    @property
+    def timeframe_state_id(self) -> str:
+        return self.state.state_id
+
+    @property
+    def direction(self) -> Direction:
+        return self.state.direction
+
+    @property
+    def state_confirm_time(self) -> datetime:
+        return self.state.confirm_time
+
+    @property
+    def state_origin_time(self) -> datetime:
+        return self.state.origin_time
 
     def to_dict(self) -> dict[str, object]:
         return {
             "schema_version": self.schema_version,
+            "context_state_id": self.context_state_id,
             "context": self.context.to_dict(),
             "timeframe_snapshot_id": self.timeframe_snapshot_id,
             "timeframe_snapshot_as_of_time": self.timeframe_snapshot_as_of_time.isoformat(),
-            "timeframe_state_id": self.timeframe_state_id,
-            "direction": self.direction.value,
-            "state_confirm_time": self.state_confirm_time.isoformat(),
-            "state_origin_time": self.state_origin_time.isoformat(),
+            "state": self.state.to_dict(),
             "source_lifecycle_snapshot_id": self.source_lifecycle_snapshot_id,
         }
 
     @classmethod
     def from_dict(cls, payload: Mapping[str, Any]) -> ResonanceContextState:
         fields = {
+            "context_state_id",
             "context",
             "timeframe_snapshot_id",
             "timeframe_snapshot_as_of_time",
-            "timeframe_state_id",
-            "direction",
-            "state_confirm_time",
-            "state_origin_time",
+            "state",
             "source_lifecycle_snapshot_id",
         }
         data = _exact_payload(payload, cls.__name__, fields)
         try:
             return cls(
+                context_state_id=data["context_state_id"],
                 context=ResonanceContext.from_dict(data["context"]),
                 timeframe_snapshot_id=data["timeframe_snapshot_id"],
                 timeframe_snapshot_as_of_time=_parse_time(
                     "timeframe_snapshot_as_of_time",
                     data["timeframe_snapshot_as_of_time"],
                 ),
-                timeframe_state_id=data["timeframe_state_id"],
-                direction=Direction(data["direction"]),
-                state_confirm_time=_parse_time(
-                    "state_confirm_time", data["state_confirm_time"]
-                ),
-                state_origin_time=_parse_time(
-                    "state_origin_time", data["state_origin_time"]
-                ),
+                state=TimeframeState.from_dict(data["state"]),
                 source_lifecycle_snapshot_id=data[
                     "source_lifecycle_snapshot_id"
                 ],
@@ -889,6 +924,21 @@ class ResonanceEvidence:
             raise ResonanceFrameEngineError(
                 "evidence BoundaryRef lifecycle_state must equal evidence lifecycle_state"
             )
+        expected_boundary_id = f"lifecycle-boundary-v1-{self.lifecycle_state_id}"
+        expected_boundary_parents = tuple(
+            sorted((self.subject_id, self.lifecycle_event_id))
+        )
+        if (
+            self.boundary.object_id != expected_boundary_id
+            or self.boundary.provenance.source_module != _LIFECYCLE_MODULE
+            or self.boundary.provenance.source_object_id
+            != self.lifecycle_state_id
+            or self.boundary.provenance.parent_object_ids
+            != expected_boundary_parents
+        ):
+            raise ResonanceFrameEngineError(
+                "evidence BoundaryRef is not the formal lifecycle mapping"
+            )
         structural_confirm = _time(
             f"{name}.structural_confirm_time", self.structural_confirm_time,
             ResonanceFrameEngineError,
@@ -927,6 +977,11 @@ class ResonanceEvidence:
             )
         if not isinstance(self.provenance, ProvenanceRef):
             raise ResonanceFrameEngineError("evidence provenance must be a ProvenanceRef")
+        _engine_id_from_notes(
+            self.provenance,
+            object_name="evidence",
+            error_type=ResonanceFrameEngineError,
+        )
         expected_id = _evidence_id(
             subject_id=self.subject_id,
             lifecycle_state_id=self.lifecycle_state_id,
@@ -952,7 +1007,8 @@ class ResonanceEvidence:
             self.boundary.object_id,
         }))
         if (
-            self.provenance.source_object_id != self.evidence_id
+            self.provenance.source_module != _ASSEMBLER_MODULE
+            or self.provenance.source_object_id != self.evidence_id
             or self.provenance.parent_object_ids != expected_parents
         ):
             raise ResonanceFrameEngineError(
@@ -1096,7 +1152,7 @@ class ResonanceFrameReport:
             self.reference_price_age_seconds,
             ResonanceFrameEngineError,
         )
-        expected_age = Decimal(str((as_of - available).total_seconds()))
+        expected_age = _elapsed_seconds(as_of - available)
         if available > as_of or age != expected_age or age < 0:
             raise ResonanceFrameEngineError("reference price age facts are inconsistent")
         for field_name in ("engine_id", "engine_version", "policy_id"):
@@ -1111,6 +1167,10 @@ class ResonanceFrameReport:
                     name, field_name, getattr(self, field_name),
                     ResonanceFrameEngineError,
                 ),
+            )
+        if self.assumptions != _REPORT_ASSUMPTIONS:
+            raise ResonanceFrameEngineError(
+                "report assumptions must equal the fixed C-007A assumptions"
             )
         object.__setattr__(self, "as_of_time", as_of)
         object.__setattr__(self, "earliest_evidence_confirm_time", earliest)
@@ -1262,6 +1322,7 @@ class ResonanceFrame:
         if any(
             item.source_lifecycle_snapshot_id != self.source_lifecycle_snapshot_id
             or item.timeframe_snapshot_as_of_time != source_time
+            or item.state.symbol != self.config_snapshot.symbol
             or item.state_confirm_time > as_of
             for item in context_states
         ):
@@ -1290,6 +1351,7 @@ class ResonanceFrame:
         if any(
             item.context not in self.config_snapshot.contexts
             or item.direction is not directions[item.context]
+            or item.boundary.symbol != self.config_snapshot.symbol
             or item.state_confirm_time > as_of
             or item.boundary.confirm_time > as_of
             for item in evidence
@@ -1309,6 +1371,31 @@ class ResonanceFrame:
             raise ResonanceFrameEngineError(
                 "BROKEN and RETIRED exclusion IDs must be disjoint"
             )
+        evidence_subject_ids = {item.subject_id for item in evidence}
+        if evidence_subject_ids & set(broken):
+            raise ResonanceFrameEngineError(
+                "effective evidence and BROKEN exclusions must be disjoint"
+            )
+        if evidence_subject_ids & set(retired):
+            raise ResonanceFrameEngineError(
+                "effective evidence and RETIRED exclusions must be disjoint"
+            )
+        for item in evidence:
+            evidence_engine_id = _engine_id_from_notes(
+                item.provenance,
+                object_name="evidence",
+                error_type=ResonanceFrameEngineError,
+            )
+            if (
+                item.provenance.source_module != _ASSEMBLER_MODULE
+                or item.provenance.source_version
+                != self.config_snapshot.engine_version
+                or item.provenance.policy_id != self.config_snapshot.policy_id
+                or evidence_engine_id != self.config_snapshot.engine_id
+            ):
+                raise ResonanceFrameEngineError(
+                    "evidence provenance contradicts frame config"
+                )
         if not isinstance(self.report, ResonanceFrameReport):
             raise ResonanceFrameEngineError("frame report type is invalid")
         self._validate_report(context_states, evidence, broken, retired, as_of)
@@ -1320,7 +1407,7 @@ class ResonanceFrame:
             source_lifecycle_snapshot_id=self.source_lifecycle_snapshot_id,
             source_lifecycle_snapshot_time=source_time.isoformat(),
             reference_price_id=self.reference_price.reference_id,
-            context_state_ids=tuple(item.timeframe_state_id for item in context_states),
+            context_state_ids=tuple(item.context_state_id for item in context_states),
             evidence_ids=tuple(item.evidence_id for item in evidence),
             excluded_broken_subject_ids=broken,
             excluded_retired_subject_ids=retired,
@@ -1337,10 +1424,17 @@ class ResonanceFrame:
             *(item.lifecycle_state_id for item in evidence),
         }))
         if (
-            self.provenance.source_object_id != self.frame_id
+            self.provenance.source_module != _ASSEMBLER_MODULE
+            or self.provenance.source_object_id != self.frame_id
             or self.provenance.source_version != self.config_snapshot.engine_version
             or self.provenance.policy_id != self.config_snapshot.policy_id
             or self.provenance.parent_object_ids != expected_parents
+            or _engine_id_from_notes(
+                self.provenance,
+                object_name="frame",
+                error_type=ResonanceFrameEngineError,
+            )
+            != self.config_snapshot.engine_id
         ):
             raise ResonanceFrameEngineError(
                 "frame provenance does not match exact upstream parents"
@@ -1382,15 +1476,23 @@ class ResonanceFrame:
             "latest_evidence_confirm_time": max(times) if times else None,
             "reference_price": self.reference_price.price,
             "reference_price_available_time": self.reference_price.available_time,
-            "reference_price_age_seconds": Decimal(str((as_of - self.reference_price.available_time).total_seconds())),
+            "reference_price_age_seconds": _elapsed_seconds(
+                as_of - self.reference_price.available_time
+            ),
             "engine_id": self.config_snapshot.engine_id,
             "engine_version": self.config_snapshot.engine_version,
             "policy_id": self.config_snapshot.policy_id,
         }
         if any(getattr(self.report, field_name) != value for field_name, value in expected.items()):
             raise ResonanceFrameEngineError("frame report contradicts frame facts")
-        if self.report.errors:
-            raise ResonanceFrameEngineError("a successful frame report cannot contain errors")
+        if (
+            self.report.assumptions != _REPORT_ASSUMPTIONS
+            or self.report.warnings
+            or self.report.errors
+        ):
+            raise ResonanceFrameEngineError(
+                "successful frame report assumptions/warnings/errors are invalid"
+            )
 
     def to_dict(self) -> dict[str, object]:
         return {

@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from decimal import Decimal
 from typing import Any, Mapping
 
 from msa.data import CanonicalBar, Timeframe
@@ -33,8 +32,10 @@ from .contracts import (
     ResonanceFrameInput,
     ResonanceFrameReport,
     _context_key,
+    _elapsed_seconds,
     _evidence_key,
     _exact_payload,
+    _REPORT_ASSUMPTIONS,
 )
 from .errors import (
     ResonanceFrameConfigurationError,
@@ -42,7 +43,7 @@ from .errors import (
     ResonanceFrameInputError,
     ResonanceFrameSerializationError,
 )
-from .identity import _evidence_id, _frame_id, _reference_id
+from .identity import _context_state_id, _evidence_id, _frame_id, _reference_id
 
 
 _EFFECTIVE_STATES = {
@@ -121,9 +122,7 @@ class ResonanceFrameAssembler:
             source_lifecycle_snapshot_id=lifecycle.snapshot_id,
             source_lifecycle_snapshot_time=lifecycle.as_of_time.isoformat(),
             reference_price_id=reference.reference_id,
-            context_state_ids=tuple(
-                item.timeframe_state_id for item in context_states
-            ),
+            context_state_ids=tuple(item.context_state_id for item in context_states),
             evidence_ids=tuple(item.evidence_id for item in evidence),
             excluded_broken_subject_ids=broken,
             excluded_retired_subject_ids=retired,
@@ -297,14 +296,20 @@ class ResonanceFrameAssembler:
                 )
             snapshot = matches[0]
             state = snapshot.state
+            context_state_id = _context_state_id(
+                context=context.to_dict(),
+                timeframe_snapshot_id=snapshot.snapshot_id,
+                timeframe_snapshot_as_of_time=snapshot.as_of_time.isoformat(),
+                state=state.to_dict(),
+                source_lifecycle_snapshot_id=snapshot.source_lifecycle_snapshot_id,
+                schema_version=SCHEMA_VERSION,
+            )
             states.append(ResonanceContextState(
+                context_state_id=context_state_id,
                 context=context,
                 timeframe_snapshot_id=snapshot.snapshot_id,
                 timeframe_snapshot_as_of_time=snapshot.as_of_time,
-                timeframe_state_id=state.state_id,
-                direction=state.direction,
-                state_confirm_time=state.confirm_time,
-                state_origin_time=state.origin_time,
+                state=state,
                 source_lifecycle_snapshot_id=snapshot.source_lifecycle_snapshot_id,
             ))
             snapshots.append(snapshot)
@@ -335,14 +340,7 @@ class ResonanceFrameAssembler:
         reference_id = _reference_id(bar.to_dict(), schema_version=SCHEMA_VERSION)
         return ReferencePriceSnapshot(
             reference_id=reference_id,
-            symbol=bar.symbol,
-            timeframe=bar.timeframe,
-            price=bar.close,
-            bar_timestamp=bar.timestamp,
-            bar_end_time=bar.end_time,
-            available_time=bar.available_time,
-            source=bar.source,
-            source_timezone=bar.source_timezone,
+            canonical_bar=bar,
         )
 
     def _evidence(
@@ -503,18 +501,13 @@ class ResonanceFrameAssembler:
             latest_evidence_confirm_time=max(times) if times else None,
             reference_price=reference.price,
             reference_price_available_time=reference.available_time,
-            reference_price_age_seconds=Decimal(
-                str((as_of - reference.available_time).total_seconds())
+            reference_price_age_seconds=_elapsed_seconds(
+                as_of - reference.available_time
             ),
             engine_id=self.config.engine_id,
             engine_version=self.config.engine_version,
             policy_id=self.config.policy_id,
-            assumptions=(
-                "LifecycleSnapshot states are the complete evidence universe",
-                "TimeframeState supplies direction and exact lifecycle alignment only",
-                "reference price is completed CanonicalBar.close visible by available_time",
-                "C-007A performs no clustering, score, ranking, or ActiveBox selection",
-            ),
+            assumptions=_REPORT_ASSUMPTIONS,
             warnings=(),
             errors=(),
         )

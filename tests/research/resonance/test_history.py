@@ -71,10 +71,7 @@ def test_history_rejects_price_availability_regression() -> None:
     forged_reference = replace(
         later.reference_price,
         reference_id=history.frames[0].reference_price.reference_id,
-        price=history.frames[0].reference_price.price,
-        bar_timestamp=history.frames[0].reference_price.bar_timestamp,
-        bar_end_time=history.frames[0].reference_price.bar_end_time,
-        available_time=history.frames[0].reference_price.available_time,
+        canonical_bar=history.frames[0].reference_price.canonical_bar,
     )
     # The Frame contract catches the forged ID/frame mismatch before History can accept it.
     with pytest.raises(ResonanceFrameEngineError):

@@ -228,9 +228,22 @@ def test_price_only_update_does_not_change_evidence_payload() -> None:
     assert at_t3.reference_price != at_t2.reference_price
 
 
-def test_non_config_context_does_not_enter_evidence() -> None:
-    frame = assembler().build_as_of(frame_input(include_extra=True), T1)
-    assert "non-config" not in {item.subject_id for item in frame.evidence}
+def test_non_config_context_changes_lineage_not_scoring_facts() -> None:
+    baseline = assembler().build_as_of(frame_input(), T1)
+    extra = assembler().build_as_of(frame_input(include_extra=True), T1)
+    assert "non-config" not in {item.subject_id for item in extra.evidence}
+    assert extra.evidence == baseline.evidence
+    assert extra.excluded_broken_subject_ids == baseline.excluded_broken_subject_ids
+    assert extra.excluded_retired_subject_ids == baseline.excluded_retired_subject_ids
+    assert extra.report == baseline.report
+    assert tuple(item.timeframe_state_id for item in extra.context_states) == tuple(
+        item.timeframe_state_id for item in baseline.context_states
+    )
+    assert extra.source_lifecycle_snapshot_id != baseline.source_lifecycle_snapshot_id
+    assert tuple(item.context_state_id for item in extra.context_states) != tuple(
+        item.context_state_id for item in baseline.context_states
+    )
+    assert extra.frame_id != baseline.frame_id
 
 
 def test_c006b_unselected_effective_structure_remains_visible() -> None:

@@ -38,10 +38,12 @@ subjects even when only the newer one is selected by C-006B.
 
 ## 6. TimeframeState is causal context
 
-Each configured context contributes its stored `Direction`, state ID, state
-OriginTime, state ConfirmTime, timeframe snapshot ID, and lifecycle source ID.
-C-007A does not infer Direction or rerun selection, lifecycle, pool, level, or Swing
-logic.
+Each configured context embeds the authoritative immutable `TimeframeState`, plus
+its timeframe snapshot ID and lifecycle source ID. Direction, state ID, OriginTime,
+and ConfirmTime are read-only views of that object rather than duplicated facts. A
+deterministic `context_state_id` hashes the complete TimeframeState and alignment
+payload. C-007A does not infer Direction or rerun selection, lifecycle, pool, level,
+or Swing logic.
 
 ## 7. Exact multi-context alignment
 
@@ -53,9 +55,11 @@ frame is therefore one atomic view of one lifecycle snapshot.
 
 ## 8. Reference price
 
-Reference price is exactly `CanonicalBar.close`. The bar must be complete, match the
-configured symbol and reference timeframe, and come from an error-free `LoadResult`.
-No float conversion, rounding, ATR, or derived price is used.
+`ReferencePriceSnapshot` embeds the complete authoritative `CanonicalBar`; reference
+price is its read-only `close` property. The snapshot recomputes `reference_id` from
+the complete canonical bar payload. The bar must be complete, match the configured
+symbol and reference timeframe, and come from an error-free `LoadResult`. No float
+conversion, rounding, ATR, or derived price is used.
 
 ## 9. Available-time semantics
 
@@ -63,6 +67,10 @@ The selected reference bar is the latest deterministic bar satisfying
 `available_time <= processing_time`. `end_time` alone grants no visibility. A later
 bar, even when historically ended, cannot change an earlier frame before its
 explicit availability.
+
+Reference age is computed from integer days, seconds, and microseconds before exact
+Decimal division by one million. It never passes through floating-point
+`timedelta.total_seconds()`.
 
 ## 10. Effective lifecycle eligibility
 
@@ -87,13 +95,16 @@ Every Evidence boundary is created only through
 `LifecycleSubjectState.to_boundary_ref()`. A FLIPPED state therefore carries its
 effective reversed side and role, current lifecycle state, state ConfirmTime, and
 lifecycle provenance. The original `subject_ref` is retained as an upstream fact,
-not substituted as the current boundary.
+not substituted as the current boundary. Validation also requires the formal
+`lifecycle-boundary-v1-{state_id}` identity, lifecycle engine source, exact state
+source object, exact subject/event parents, lifecycle state, and state ConfirmTime.
 
 ## 14. BROKEN and RETIRED
 
 Configured-context BROKEN and RETIRED subject IDs are recorded in separate canonical
 frame and report fields. They generate no current Evidence and are not deleted from
-the upstream lifecycle history.
+the upstream lifecycle history. Evidence, BROKEN, and RETIRED subject partitions are
+pairwise disjoint.
 
 ## 15. Context Direction
 
@@ -148,31 +159,43 @@ full frame payloads, not only counts.
 
 ## 23. Deterministic IDs
 
-Reference, Evidence, and Frame identities use compact canonical JSON and SHA-256.
-Frame identity includes config, processing time, lifecycle source, reference source,
-ordered context state IDs, ordered evidence IDs, exclusions, and schema identity. No
-clock, UUID, Python `hash()`, filename, or input position participates.
+Reference, ContextState, Evidence, and Frame identities use compact canonical JSON
+and SHA-256. Frame identity includes config, processing time, lifecycle source,
+reference source, ordered complete-payload ContextState identities, ordered evidence
+IDs, exclusions, and schema identity. No clock, UUID, Python `hash()`, filename, or
+input position participates.
 
 ## 24. Provenance
 
 Frame provenance is bounded to the selected lifecycle snapshot, selected timeframe
 snapshots, reference snapshot, and selected lifecycle state IDs. Evidence provenance
 is bounded to the subject, lifecycle state, latest lifecycle event, and effective
-boundary. Complete histories are never copied into provenance.
+boundary. Module, version, policy, the single engine-ID note, and exact parent sets
+are validated against the frame config. Complete histories are never copied into
+provenance.
 
-## 25. Known limitations
+## 25. Non-configured contexts
+
+A non-configured lifecycle context cannot enter Evidence, configured TimeframeState
+selection facts, effective/excluded sets, report structure counts, or any later
+C-007B scoring input. It can change the raw lifecycle snapshot ID, timeframe snapshot
+lineage (including lineage-bearing upstream provenance), Frame provenance, and Frame
+ID. The Frame is intentionally bound to the exact observed upstream snapshot; this
+contract does not claim that adding a non-configured context preserves Frame ID.
+
+## 26. Known limitations
 
 This is an offline immutable-history baseline without live watermarks, corrections,
 or a revision protocol. Upstream histories must preserve old immutable snapshots when
 future facts are appended. C-007A records facts but does not establish empirical edge.
 
-## 26. C-007B and C-007C boundaries
+## 27. C-007B and C-007C boundaries
 
 C-007B may operate on the complete Evidence tuple to evaluate zones, dependence,
 distance, and configured scores after separate approval. C-007C may select, freeze,
 replace, or retire an Active Box only after C-007B. Neither behavior exists here.
 
-## 27. C-008 boundary and exclusions
+## 28. C-008 boundary and exclusions
 
 C-008 integration, TradingView/Pine behavior, Fibonacci, Imbalance, RSI, volume or
 momentum filters, signals, EA behavior, and parameter optimization are outside this

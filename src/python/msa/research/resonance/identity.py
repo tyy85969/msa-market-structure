@@ -25,6 +25,26 @@ def _reference_id(bar: Mapping[str, object], *, schema_version: int) -> str:
     return f"resonance-reference-v1-{_digest({'bar': dict(bar), 'schema_version': schema_version})}"
 
 
+def _context_state_id(
+    *,
+    context: Mapping[str, object],
+    timeframe_snapshot_id: str,
+    timeframe_snapshot_as_of_time: str,
+    state: Mapping[str, object],
+    source_lifecycle_snapshot_id: str,
+    schema_version: int,
+) -> str:
+    identity = {
+        "context": dict(context),
+        "timeframe_snapshot_id": timeframe_snapshot_id,
+        "timeframe_snapshot_as_of_time": timeframe_snapshot_as_of_time,
+        "state": dict(state),
+        "source_lifecycle_snapshot_id": source_lifecycle_snapshot_id,
+        "schema_version": schema_version,
+    }
+    return f"resonance-context-state-v1-{_digest(identity)}"
+
+
 def _evidence_id(
     *,
     subject_id: str,

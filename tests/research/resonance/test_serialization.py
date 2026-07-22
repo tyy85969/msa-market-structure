@@ -64,13 +64,16 @@ def test_unknown_nested_field_fails_closed() -> None:
 @pytest.mark.parametrize(
     ("path", "value"),
     [
-        (("reference_price", "price"), 101.0),
+        (("reference_price", "canonical_bar", "close"), 101.0),
         (("report", "reference_price_age_seconds"), 0),
     ],
 )
 def test_decimal_serialization_requires_strings(path, value) -> None:
     payload = assembler().build_as_of(frame_input(), T1).to_dict()
-    payload[path[0]][path[1]] = value
+    target = payload
+    for key in path[:-1]:
+        target = target[key]
+    target[path[-1]] = value
     with pytest.raises(ResonanceFrameSerializationError, match="Decimal string"):
         ResonanceFrame.from_dict(payload)
 
