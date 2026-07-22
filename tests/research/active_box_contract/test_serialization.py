@@ -1,4 +1,5 @@
 from dataclasses import fields
+from decimal import Decimal
 
 import pytest
 
@@ -15,8 +16,10 @@ from msa.research.active_box import (
     ZoneEligibility,
     selection_key,
 )
+from msa.research.active_box.identity import digest
 
 from .fixtures import config, initial_frame, selection_history
+from .test_history import _policy_history
 
 
 def public_objects():
@@ -66,3 +69,11 @@ def test_existing_normal_identity_outputs_remain_byte_for_byte_stable() -> None:
     assert box.box_snapshot_id=="active-box-snapshot-v1-0b5be6dbff43c270e4a8e47863a2f2c421b6f8c1db06a93ddc829b544422ecd8"
     assert event.event_id=="active-box-event-v1-a01bdd8922265498bca64568afadac1ece3af1efc1eeef937527a3adb2abba3a"
     assert frame.selection_frame_id=="active-box-selection-frame-v1-f9392727f7c7ff08f74a78c1900f544ec2742a449f84097fa0be9048fc4117d1"
+    assert frame.lower_decision.decision_id=="active-box-decision-v1-c5ed2ed6cb4b9bfdd44c9b4e53ea732977f0a536674fa2455a2017d2c3e3dd86"
+    assert frame.upper_decision.decision_id=="active-box-decision-v1-e96aa768f6e2da94e2c9730dc2366489dc42e1a2f55737ed240f1e3d48866ad5"
+
+
+def test_pair_changed_frame_id_and_normal_history_payload_remain_stable() -> None:
+    changed=next(frame for frame in _policy_history(config(minimum_selection_score=Decimal("0.25"))).frames if len(frame.emitted_events)==2)
+    assert changed.selection_frame_id=="active-box-selection-frame-v1-bf561ed0e9e7ff95ef24e4ed422c8110b69a9ba05ddf11a3561102099ce7502e"
+    assert digest(selection_history().to_dict())=="0b07c4510669aa6e777e375eb3e5e661d3b205cc3522257c45550620c66c2dbc"

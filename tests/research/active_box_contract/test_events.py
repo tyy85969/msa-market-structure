@@ -1,3 +1,5 @@
+from dataclasses import replace
+
 import pytest
 
 from msa.research.active_box import (
@@ -71,3 +73,12 @@ def test_event_builder_rejects_invalid_public_input_types(field,bad) -> None:
     values[field]=bad
     with pytest.raises(ActiveBoxContractError):
         build_active_box_event(**values)
+
+
+@pytest.mark.parametrize("bad",["snapshot",[],1])
+def test_direct_frozen_event_construction_rejects_invalid_previous_snapshot(bad) -> None:
+    previous=initial_frame().active_box_snapshot; frozen=freeze_active_box_snapshot(score_frame(at=T2),previous)
+    event=build_active_box_event(event_type=ActiveBoxEventType.FROZEN,event_reason=ActiveBoxEventReason.PAIR_UNAVAILABLE,
+        previous_snapshot=previous,resulting_snapshot=frozen)
+    with pytest.raises(ActiveBoxContractError):
+        replace(event,previous_box_snapshot=bad)

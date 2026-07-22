@@ -4,7 +4,7 @@ from dataclasses import replace
 import pytest
 
 from msa.domain import BoundarySide
-from msa.research.active_box import ActiveBoxSideAction, build_side_decision, selection_key
+from msa.research.active_box import ActiveBoxContractError, ActiveBoxSideAction, build_side_decision, selection_key
 
 from .fixtures import config, score_frame
 
@@ -69,3 +69,10 @@ def test_nonnegative_distance_and_strict_score_gain_can_replace() -> None:
     frame=score_frame(); far=max(frame.upper_zones,key=lambda item:item.distance)
     decision=build_side_decision(frame,config(absolute_replacement_distance_margin=Decimal("999"),minimum_replacement_selection_score_improvement=Decimal("0.1")),BoundarySide.UPPER,far.zone_key_id)
     assert decision.action is ActiveBoxSideAction.REPLACE
+
+
+@pytest.mark.parametrize("bad",["provenance",[],None])
+def test_direct_decision_construction_rejects_invalid_provenance(bad) -> None:
+    decision=build_side_decision(score_frame(),config(),BoundarySide.LOWER)
+    with pytest.raises(ActiveBoxContractError):
+        replace(decision,provenance=bad)

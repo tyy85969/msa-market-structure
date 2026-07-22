@@ -124,7 +124,9 @@ def _string_tuple(value: object, field: str, *, unique: bool = False, canonical:
     return result
 
 
-def _engine_id(provenance: ProvenanceRef, name: str) -> str:
+def _engine_id(provenance: object, name: str) -> str:
+    if not isinstance(provenance,ProvenanceRef):
+        raise ActiveBoxContractError(f"{name}.provenance must be a ProvenanceRef")
     values = tuple(note[10:] for note in provenance.notes if note.startswith("engine_id="))
     if len(values) != 1 or not values[0]:
         raise ActiveBoxContractError(f"{name} provenance must contain exactly one engine_id note")
@@ -718,6 +720,8 @@ class ActiveBoxEvent:
         for n in ("source_score_frame_id","box_key_id","resulting_box_snapshot_id","lower_zone_key_id","upper_zone_key_id"): _text(getattr(self,n),n)
         _optional_text(self.previous_box_snapshot_id,"previous_box_snapshot_id")
         if not isinstance(self.event_type,ActiveBoxEventType) or not isinstance(self.event_reason,ActiveBoxEventReason) or not isinstance(self.resulting_box_snapshot,ActiveBoxSnapshot): raise ActiveBoxContractError("event nested fact is invalid")
+        if self.previous_box_snapshot is not None and not isinstance(self.previous_box_snapshot,ActiveBoxSnapshot):
+            raise ActiveBoxContractError("previous_box_snapshot must be None or an ActiveBoxSnapshot")
         result=self.resulting_box_snapshot
         if result.box_key_id!=self.box_key_id or result.box_snapshot_id!=self.resulting_box_snapshot_id or result.source_score_frame_id!=self.source_score_frame_id or result.active_box.confirm_time!=self.event_confirm_time:
             raise ActiveBoxContractError("event resulting snapshot chain is inconsistent")
@@ -876,6 +880,8 @@ class ActiveBoxSelectionFrame:
             raise ActiveBoxContractError("SelectionFrame config symbol conflicts with source Frame")
         if not isinstance(self.lower_decision,ActiveBoxSideDecision) or not isinstance(self.upper_decision,ActiveBoxSideDecision) or self.lower_decision.side is not BoundarySide.LOWER or self.upper_decision.side is not BoundarySide.UPPER:
             raise ActiveBoxContractError("SelectionFrame requires exactly LOWER and UPPER decisions")
+        if self.active_box_snapshot is not None and not isinstance(self.active_box_snapshot,ActiveBoxSnapshot):
+            raise ActiveBoxContractError("active_box_snapshot must be None or an ActiveBoxSnapshot")
         for decision in (self.lower_decision,self.upper_decision):
             if decision.source_score_frame_id!=self.source_score_frame_id or decision.as_of_time!=self.as_of_time: raise ActiveBoxContractError("decision source mapping is inconsistent")
         from .policy import validate_side_decision

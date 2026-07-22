@@ -1,4 +1,5 @@
 from copy import deepcopy
+from dataclasses import replace
 from decimal import Decimal
 
 import pytest
@@ -107,6 +108,12 @@ def test_fully_resigned_initial_pair_selection_price_attack_is_rejected() -> Non
     payload=_fully_resign_created_selection_price(frame,reference-Decimal("1"))
     with pytest.raises(Exception,match="formal creation result including selection price"):
         ActiveBoxSelectionFrame.from_dict(payload)
+
+
+@pytest.mark.parametrize("bad",["snapshot",[],1])
+def test_direct_frame_construction_rejects_invalid_active_box_snapshot(bad) -> None:
+    with pytest.raises(ActiveBoxContractError):
+        replace(initial_frame(),active_box_snapshot=bad)
 
 
 @pytest.mark.parametrize("field,bad",[
