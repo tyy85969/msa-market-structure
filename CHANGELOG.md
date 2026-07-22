@@ -52,6 +52,9 @@
 - Added the causal C-007A multi-context `ResonanceFrame` assembler over immutable lifecycle and timeframe-state histories.
 - Added the complete effective lifecycle evidence universe, exact context alignment, completed-bar reference prices, and deterministic bounded provenance.
 - Added resonance-frame Batch, As-Of, Replay, strict serialization, input-order invariance, and full-payload no-lookahead coverage without scoring or Active Box behavior.
+- Added deterministic C-007B side-separated resonance Zones over the complete C-007A Evidence universe.
+- Added explicit contribution factors, family dependency adjustment, diversity bonuses, quality/selection scores, explanations, per-side ranking, and stable Zone identities.
+- Added score-frame Batch/Replay, strict serialization, and full-payload no-lookahead coverage without Active Box selection.
 
 ### Added
 - 初始化 MSA 项目仓库。
