@@ -505,7 +505,10 @@ class ResonanceScorer:
     @staticmethod
     def _draft_rank_key(item: _ZoneDraft) -> tuple[object, ...]:
         latest = item.get("latest_evidence_confirm_time")
-        assert isinstance(latest, datetime)
+        if not isinstance(latest, datetime):
+            raise ResonanceScoringEngineError(
+                "zone draft latest_evidence_confirm_time must be a datetime"
+            )
         epoch = datetime(1970, 1, 1, tzinfo=latest.tzinfo)
         delta = latest - epoch
         micros = delta.days * 86_400_000_000 + delta.seconds * 1_000_000 + delta.microseconds

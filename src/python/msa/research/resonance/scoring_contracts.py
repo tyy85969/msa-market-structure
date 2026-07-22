@@ -233,10 +233,13 @@ def _range_gap(left: PriceRange, right: PriceRange) -> Decimal:
 
 
 def _identity(value: str, prefix: str, field_name: str) -> None:
+    if not isinstance(value, str):
+        raise ResonanceScoringEngineError(
+            f"{field_name} must be a canonical SHA-256 identity"
+        )
     digest = value.removeprefix(prefix)
     if (
-        not isinstance(value, str)
-        or not value.startswith(prefix)
+        not value.startswith(prefix)
         or len(digest) != 64
         or any(character not in "0123456789abcdef" for character in digest)
     ):
@@ -588,16 +591,28 @@ class ResonanceScoringConfig:
 
     def effective_tolerance(self, reference_price: Decimal) -> Decimal:
         if self.tolerance_mode is ResonanceToleranceMode.ABSOLUTE:
-            assert self.absolute_tolerance is not None
+            if self.absolute_tolerance is None:
+                raise ResonanceScoringConfigurationError(
+                    "tolerance mode and absolute_tolerance are inconsistent"
+                )
             return self.absolute_tolerance
-        assert self.reference_tolerance_fraction is not None
+        if self.reference_tolerance_fraction is None:
+            raise ResonanceScoringConfigurationError(
+                "tolerance mode and reference_tolerance_fraction are inconsistent"
+            )
         return reference_price * self.reference_tolerance_fraction
 
     def distance_horizon(self, reference_price: Decimal) -> Decimal:
         if self.distance_horizon_mode is ResonanceToleranceMode.ABSOLUTE:
-            assert self.absolute_distance_horizon is not None
+            if self.absolute_distance_horizon is None:
+                raise ResonanceScoringConfigurationError(
+                    "distance horizon mode and absolute_distance_horizon are inconsistent"
+                )
             return self.absolute_distance_horizon
-        assert self.reference_distance_fraction is not None
+        if self.reference_distance_fraction is None:
+            raise ResonanceScoringConfigurationError(
+                "distance horizon mode and reference_distance_fraction are inconsistent"
+            )
         return reference_price * self.reference_distance_fraction
 
     def to_dict(self) -> dict[str, object]:
@@ -2085,6 +2100,10 @@ def _validate_zone_against_frame(
     frame: ResonanceFrame,
     config: ResonanceScoringConfig,
 ) -> None:
+    if zone.source_frame_id != frame.frame_id:
+        raise ResonanceScoringEngineError(
+            "zone source_frame_id must equal the authoritative source Frame"
+        )
     try:
         members = tuple(evidence_by_id[item] for item in zone.member_evidence_ids)
     except KeyError as exc:
@@ -2101,6 +2120,9 @@ def _validate_zone_against_frame(
         raise ResonanceScoringEngineError("zone price range is not the member envelope")
     expected_subjects = tuple(sorted(item.subject_id for item in members))
     expected_contexts = tuple(sorted({item.context for item in members}, key=_context_key))
+    expected_context_weights = tuple(
+        item for item in config.context_weights if item.context in expected_contexts
+    )
     expected_sources = tuple(sorted({source for item in members for source in item.source_types}, key=lambda item: item.value))
     expected_families = tuple(sorted({family for item in members for family in item.structure_families}))
     if (
@@ -2110,6 +2132,17 @@ def _validate_zone_against_frame(
         or zone.structure_families != expected_families
     ):
         raise ResonanceScoringEngineError("zone member-derived facts are inconsistent")
+    if (
+        zone.explanation.member_contexts != expected_contexts
+        or zone.explanation.context_weights != expected_context_weights
+    ):
+        raise ResonanceScoringEngineError(
+            "zone explanation contexts or configured context weights are inconsistent"
+        )
+    if zone.explanation.dependency_repeat_credit != config.dependency_repeat_credit:
+        raise ResonanceScoringEngineError(
+            "zone explanation dependency repeat credit is inconsistent"
+        )
     expected_counts = (
         sum(item.tier is ResonanceEvidenceTier.CANDIDATE for item in members),
         sum(item.tier is ResonanceEvidenceTier.CONFIRMED for item in members),
@@ -2251,7 +2284,8 @@ def _validate_zone_against_frame(
             )
             if contribution.contribution_id != expected_contribution_id:
                 raise ResonanceScoringEngineError("contribution_id does not match exact inputs")
-    if zone.explanation.dependency_family_edges != _dependency_edges(members):
+    expected_dependency_edges = _dependency_edges(members)
+    if zone.explanation.dependency_family_edges != expected_dependency_edges:
         raise ResonanceScoringEngineError("dependency family graph is inconsistent")
     expected_source_bonus = min(
         config.source_diversity_bonus_cap,
@@ -2291,6 +2325,17 @@ def _validate_zone_against_frame(
     )
     if zone.resonance_class is not expected_class:
         raise ResonanceScoringEngineError("zone resonance class is inconsistent")
+    expected_rationale = ResonanceClassRationale(
+        evidence_count=len(members),
+        distinct_context_count=len(expected_contexts),
+        minimum_resonant_evidence_count=config.minimum_resonant_evidence_count,
+        minimum_resonant_context_count=config.minimum_resonant_context_count,
+        assigned_class=expected_class,
+    )
+    if zone.explanation.resonance_class_rationale != expected_rationale:
+        raise ResonanceScoringEngineError(
+            "zone explanation resonance class rationale is inconsistent"
+        )
     member_boundary_ranges = tuple(
         {
             "subject_id": item.subject_id,
@@ -2350,3 +2395,53 @@ def _validate_zone_against_frame(
         or zone.provenance.notes != (f"engine_id={config.engine_id}",)
     ):
         raise ResonanceScoringEngineError("zone provenance is inconsistent")
+    expected_dependency_base = sum(
+        (item.adjusted_component_score for item in zone.dependency_components),
+        Decimal("0"),
+    )
+    expected_quality = (
+        expected_dependency_base + expected_source_bonus + expected_context_bonus
+    )
+    expected_selection = expected_quality * distance_factor * placement
+    expected_rank_key = ResonanceRankKey(
+        selection_score=expected_selection,
+        quality_score=expected_quality,
+        distinct_context_count=len(expected_contexts),
+        distinct_source_type_count=len(expected_sources),
+        distance=distance,
+        latest_evidence_confirm_time=max(times),
+        zone_key_id=expected_key,
+        zone_snapshot_id=expected_snapshot,
+    )
+    expected_explanation = ResonanceZoneExplanation(
+        effective_clustering_tolerance=effective_tolerance,
+        direct_member_gaps=direct_gaps,
+        single_link_member_evidence_ids=zone.member_evidence_ids,
+        chain_bridged=chain_bridged,
+        member_evidence_ids=zone.member_evidence_ids,
+        member_subject_ids=expected_subjects,
+        member_contexts=expected_contexts,
+        context_weights=expected_context_weights,
+        contributions=zone.contributions,
+        dependency_family_edges=expected_dependency_edges,
+        dependency_components=zone.dependency_components,
+        dependency_repeat_credit=config.dependency_repeat_credit,
+        dependency_adjusted_base_score=expected_dependency_base,
+        source_diversity_bonus=expected_source_bonus,
+        context_diversity_bonus=expected_context_bonus,
+        quality_score=expected_quality,
+        reference_price=price,
+        price_relation=relation,
+        distance=distance,
+        distance_horizon=horizon,
+        distance_factor=distance_factor,
+        placement_factor=placement,
+        selection_score=expected_selection,
+        resonance_class_rationale=expected_rationale,
+        side_rank_key=expected_rank_key,
+        assumptions=_ASSUMPTIONS,
+    )
+    if zone.explanation != expected_explanation:
+        raise ResonanceScoringEngineError(
+            "zone explanation does not match authoritative Frame and config facts"
+        )

@@ -198,7 +198,15 @@ runtime. It records tolerance, gaps, component membership, chain bridging,
 member/context facts and weights, all contribution operands, dependency edges
 and components, bonuses, scores, reference/placement/distance facts, class
 rationale, the complete rank key, and fixed assumptions. Contracts recompute
-and reject contradictory explanations.
+and reject contradictory explanations. Validation binds the complete
+Explanation to the authoritative member Evidence and scoring configuration,
+including exact Context weights, dependency repeat credit, and every resonance
+class rationale field; internally self-consistent but source-inconsistent facts
+fail closed.
+
+Every Zone, its snapshot identity and provenance, and the containing ScoreFrame
+must reference the same authoritative C-007A source Frame. Recomputing nested or
+outer identities cannot legitimize a conflicting Zone source lineage.
 
 ## 30. Batch
 

@@ -1,12 +1,17 @@
 from decimal import Decimal
 
+import pytest
+
 from msa.domain import BoundarySide, StructureSourceType
 from msa.research.resonance import (
     ResonanceClass,
     ResonancePriceRelation,
     ResonanceScorer,
+    ResonanceScoringConfigurationError,
+    ResonanceScoringEngineError,
     ResonanceToleranceMode,
 )
+from msa.research.resonance.scoring import _ZoneDraft
 from tests.research.resonance.fixtures import (
     H4_PRIMARY,
     H12_MACRO,
@@ -159,3 +164,39 @@ def test_resonance_classes_and_subthreshold_retention() -> None:
         ),
         minimum_resonant_context_count=2,
     ).zones
+
+
+def test_impossible_tolerance_mode_field_mismatches_fail_explicitly() -> None:
+    tolerance = scoring_config()
+    object.__setattr__(tolerance, "absolute_tolerance", None)
+    with pytest.raises(ResonanceScoringConfigurationError, match="inconsistent"):
+        tolerance.effective_tolerance(Decimal("100"))
+
+    tolerance_fraction = scoring_config(
+        tolerance_mode=ResonanceToleranceMode.REFERENCE_FRACTION,
+        absolute_tolerance=None,
+        reference_tolerance_fraction=Decimal("0.01"),
+    )
+    object.__setattr__(tolerance_fraction, "reference_tolerance_fraction", None)
+    with pytest.raises(ResonanceScoringConfigurationError, match="inconsistent"):
+        tolerance_fraction.effective_tolerance(Decimal("100"))
+
+    horizon = scoring_config()
+    object.__setattr__(horizon, "absolute_distance_horizon", None)
+    with pytest.raises(ResonanceScoringConfigurationError, match="inconsistent"):
+        horizon.distance_horizon(Decimal("100"))
+
+    horizon_fraction = scoring_config(
+        distance_horizon_mode=ResonanceToleranceMode.REFERENCE_FRACTION,
+        absolute_distance_horizon=None,
+        reference_distance_fraction=Decimal("0.2"),
+    )
+    object.__setattr__(horizon_fraction, "reference_distance_fraction", None)
+    with pytest.raises(ResonanceScoringConfigurationError, match="inconsistent"):
+        horizon_fraction.distance_horizon(Decimal("100"))
+
+
+def test_invalid_draft_rank_time_fails_with_engine_error() -> None:
+    draft = _ZoneDraft((("latest_evidence_confirm_time", "not-a-datetime"),))
+    with pytest.raises(ResonanceScoringEngineError, match="datetime"):
+        ResonanceScorer._draft_rank_key(draft)
