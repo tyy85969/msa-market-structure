@@ -929,6 +929,11 @@ class ActiveBoxSelectionFrame:
             from .projection import validate_zone_projection
             validate_zone_projection(self.source_score_frame,self.config_snapshot,result.lower_projection)
             validate_zone_projection(self.source_score_frame,self.config_snapshot,result.upper_projection)
+            expected_created=create_active_box_snapshot(
+                self.source_score_frame,result.lower_projection,result.upper_projection,self.config_snapshot,
+            )
+            if result!=expected_created:
+                raise ActiveBoxContractError("CREATED snapshot must equal formal creation result including selection price")
         if not isinstance(self.report,ActiveBoxSelectionReport) or self.report!=_expected_report(self.source_score_frame,self.lower_decision,self.upper_decision,self.active_box_snapshot,self.emitted_events,self.config_snapshot): raise ActiveBoxContractError("SelectionFrame report contradicts exact facts")
         require_semantic_id(self.selection_frame_id,"active-box-selection-frame-v1-",self._identity_payload(),"selection_frame_id",ActiveBoxContractError)
         parents=(self.source_score_frame_id,self.lower_decision.decision_id,self.upper_decision.decision_id,*(item.event_id for item in self.emitted_events))
@@ -1110,6 +1115,12 @@ def observe_active_box_snapshot(
     upper_zone_snapshot_id: str,
 ) -> ActiveBoxSnapshot:
     """Advance an unchanged episode observation without changing projections."""
+    if not isinstance(source_score_frame,ResonanceScoreFrame):
+        raise ActiveBoxContractError("source_score_frame must be a ResonanceScoreFrame")
+    if not isinstance(previous,ActiveBoxSnapshot):
+        raise ActiveBoxContractError("previous must be an ActiveBoxSnapshot")
+    lower_zone_snapshot_id=_text(lower_zone_snapshot_id,"lower_zone_snapshot_id")
+    upper_zone_snapshot_id=_text(upper_zone_snapshot_id,"upper_zone_snapshot_id")
     if previous.active_box.status is not ActiveBoxStatus.ACTIVE:
         raise ActiveBoxContractError("only an ACTIVE episode can be observed")
     if source_score_frame.as_of_time<=previous.active_box.as_of_time:
@@ -1127,13 +1138,17 @@ def observe_active_box_snapshot(
         raise ActiveBoxContractError("current reference price must remain inside Active Box")
     return _make_box_snapshot(source_score_frame=source_score_frame,config=previous.config_snapshot,created_time=previous.created_time,
         lower_projection=previous.lower_projection,upper_projection=previous.upper_projection,
-        observed_lower_zone_snapshot_id=_text(lower_zone_snapshot_id,"lower_zone_snapshot_id"),
-        observed_upper_zone_snapshot_id=_text(upper_zone_snapshot_id,"upper_zone_snapshot_id"),
+        observed_lower_zone_snapshot_id=lower_zone_snapshot_id,
+        observed_upper_zone_snapshot_id=upper_zone_snapshot_id,
         selection_price=previous.active_box.selection_price,status=ActiveBoxStatus.ACTIVE)
 
 
 def freeze_active_box_snapshot(source_score_frame: ResonanceScoreFrame, previous: ActiveBoxSnapshot) -> ActiveBoxSnapshot:
     """Construct a caller-requested terminal FROZEN snapshot; no policy decision occurs."""
+    if not isinstance(source_score_frame,ResonanceScoreFrame):
+        raise ActiveBoxContractError("source_score_frame must be a ResonanceScoreFrame")
+    if not isinstance(previous,ActiveBoxSnapshot):
+        raise ActiveBoxContractError("previous must be an ActiveBoxSnapshot")
     if previous.active_box.status is not ActiveBoxStatus.ACTIVE:
         raise ActiveBoxContractError("only an ACTIVE episode can be frozen")
     if source_score_frame.as_of_time<previous.active_box.as_of_time:
@@ -1155,6 +1170,14 @@ def build_active_box_event(
     previous_snapshot: ActiveBoxSnapshot | None = None,
 ) -> ActiveBoxEvent:
     """Build one explicit event fact from caller-supplied snapshots."""
+    if not isinstance(event_type,ActiveBoxEventType):
+        raise ActiveBoxContractError("event_type must be an ActiveBoxEventType")
+    if not isinstance(event_reason,ActiveBoxEventReason):
+        raise ActiveBoxContractError("event_reason must be an ActiveBoxEventReason")
+    if not isinstance(resulting_snapshot,ActiveBoxSnapshot):
+        raise ActiveBoxContractError("resulting_snapshot must be an ActiveBoxSnapshot")
+    if previous_snapshot is not None and not isinstance(previous_snapshot,ActiveBoxSnapshot):
+        raise ActiveBoxContractError("previous_snapshot must be None or an ActiveBoxSnapshot")
     payload={"event_type":event_type.value,"event_reason":event_reason.value,"event_confirm_time":resulting_snapshot.active_box.confirm_time.isoformat(),
         "source_score_frame_id":resulting_snapshot.source_score_frame_id,"box_key_id":resulting_snapshot.box_key_id,
         "previous_box_snapshot_id":None if previous_snapshot is None else previous_snapshot.box_snapshot_id,
@@ -1181,6 +1204,18 @@ def build_selection_frame(
     config: ActiveBoxSelectionConfig,
 ) -> ActiveBoxSelectionFrame:
     """Bind explicit caller-supplied facts into one immutable SelectionFrame."""
+    if not isinstance(source_score_frame,ResonanceScoreFrame):
+        raise ActiveBoxContractError("source_score_frame must be a ResonanceScoreFrame")
+    if not isinstance(lower_decision,ActiveBoxSideDecision):
+        raise ActiveBoxContractError("lower_decision must be an ActiveBoxSideDecision")
+    if not isinstance(upper_decision,ActiveBoxSideDecision):
+        raise ActiveBoxContractError("upper_decision must be an ActiveBoxSideDecision")
+    if active_box_snapshot is not None and not isinstance(active_box_snapshot,ActiveBoxSnapshot):
+        raise ActiveBoxContractError("active_box_snapshot must be None or an ActiveBoxSnapshot")
+    if not isinstance(emitted_events,tuple) or any(not isinstance(item,ActiveBoxEvent) for item in emitted_events):
+        raise ActiveBoxContractError("emitted_events must be a tuple of ActiveBoxEvent")
+    if not isinstance(config,ActiveBoxSelectionConfig):
+        raise ActiveBoxContractError("config must be an ActiveBoxSelectionConfig")
     report=_expected_report(source_score_frame,lower_decision,upper_decision,active_box_snapshot,emitted_events,config)
     payload={"as_of_time":source_score_frame.as_of_time.isoformat(),"source_score_frame_id":source_score_frame.score_frame_id,
         "source_score_frame":source_score_frame.to_dict(),"lower_decision":lower_decision.to_dict(),"upper_decision":upper_decision.to_dict(),

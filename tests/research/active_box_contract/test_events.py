@@ -1,6 +1,7 @@
 import pytest
 
 from msa.research.active_box import (
+    ActiveBoxContractError,
     ActiveBoxEventReason,
     ActiveBoxEventType,
     build_active_box_event,
@@ -56,3 +57,17 @@ def test_frozen_event_rejects_stale_previous_episode_version() -> None:
     with pytest.raises(Exception,match="stable episode facts"):
         build_active_box_event(event_type=ActiveBoxEventType.FROZEN,event_reason=ActiveBoxEventReason.PAIR_CHANGED,
             previous_snapshot=initial,resulting_snapshot=frozen)
+
+
+@pytest.mark.parametrize("field,bad",[
+    ("event_type",None),("event_type","CREATED"),("event_type",[]),
+    ("event_reason",None),("event_reason","INITIAL_PAIR"),("event_reason",[]),
+    ("resulting_snapshot",None),("resulting_snapshot","snapshot"),("resulting_snapshot",[]),
+    ("previous_snapshot","snapshot"),("previous_snapshot",1),("previous_snapshot",[]),
+])
+def test_event_builder_rejects_invalid_public_input_types(field,bad) -> None:
+    values={"event_type":ActiveBoxEventType.CREATED,"event_reason":ActiveBoxEventReason.INITIAL_PAIR,
+        "resulting_snapshot":initial_frame().active_box_snapshot,"previous_snapshot":None}
+    values[field]=bad
+    with pytest.raises(ActiveBoxContractError):
+        build_active_box_event(**values)

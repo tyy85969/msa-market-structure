@@ -2,6 +2,7 @@ import pytest
 
 from msa.domain import ActiveBoxStatus
 from msa.research.active_box import (
+    ActiveBoxContractError,
     ActiveBoxSnapshot,
     build_selection_frame,
     build_side_decision,
@@ -79,3 +80,32 @@ def test_observe_rejects_forged_current_zone_snapshots_and_time_reversal() -> No
 def test_freeze_rejects_time_reversal() -> None:
     with pytest.raises(Exception,match="backward"):
         freeze_active_box_snapshot(score_frame(at=START),initial_frame().active_box_snapshot)
+
+
+@pytest.mark.parametrize("bad",[None,"bad",[]])
+def test_observe_rejects_invalid_source_type_without_leaking_attribute_error(bad) -> None:
+    previous=initial_frame().active_box_snapshot
+    with pytest.raises(ActiveBoxContractError):
+        observe_active_box_snapshot(bad,previous,previous.observed_lower_zone_snapshot_id,previous.observed_upper_zone_snapshot_id)
+
+
+@pytest.mark.parametrize("bad",[None,"bad",[]])
+def test_observe_rejects_invalid_previous_type_without_leaking_attribute_error(bad) -> None:
+    with pytest.raises(ActiveBoxContractError):
+        observe_active_box_snapshot(score_frame(at=T2),bad,"lower","upper")
+
+
+@pytest.mark.parametrize("bad",[None,1,[]])
+def test_observe_rejects_invalid_zone_snapshot_id_types(bad) -> None:
+    previous=initial_frame().active_box_snapshot; current=score_frame(at=T2)
+    with pytest.raises(ActiveBoxContractError):
+        observe_active_box_snapshot(current,previous,bad,previous.observed_upper_zone_snapshot_id)
+    with pytest.raises(ActiveBoxContractError):
+        observe_active_box_snapshot(current,previous,previous.observed_lower_zone_snapshot_id,bad)
+
+
+@pytest.mark.parametrize("field,bad",[("source",None),("source","bad"),("source",[]),("previous",None),("previous","bad"),("previous",[])])
+def test_freeze_rejects_invalid_public_input_types(field,bad) -> None:
+    source=score_frame(at=T2); previous=initial_frame().active_box_snapshot
+    with pytest.raises(ActiveBoxContractError):
+        freeze_active_box_snapshot(bad if field=="source" else source,bad if field=="previous" else previous)

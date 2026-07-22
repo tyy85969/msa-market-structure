@@ -137,7 +137,9 @@ observed Zone facts exactly.
 ## 22. Pair creation
 
 With no current Box, a complete selected lower/upper pair creates one Box and
-one `CREATED(INITIAL_PAIR)` event. An incomplete pair creates none.
+one `CREATED(INITIAL_PAIR)` event. An incomplete pair creates none. Every
+CREATED result must exactly equal the formal creation helper output, including
+the current ScoreFrame reference price as the original selection price.
 
 ## 23. Pair replacement
 
@@ -166,6 +168,10 @@ at most one later FROZEN; a frozen key cannot become ACTIVE again.
 A Frame binds one current ScoreFrame, exact LOWER and UPPER decisions, optional
 ACTIVE snapshot, zero to two ordered events, exact report, config, and bounded
 provenance. Every identity and nested decision is recomputed.
+
+Public construction, observation, freeze, event, Frame, and decision-validation
+helpers validate input types before reading attributes or enum values and fail
+closed with the C-007C contract error hierarchy.
 
 ## 28. History
 

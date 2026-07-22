@@ -160,6 +160,12 @@ def validate_side_decision(
     config: ActiveBoxSelectionConfig,
     decision: ActiveBoxSideDecision,
 ) -> None:
+    if not isinstance(source_score_frame, ResonanceScoreFrame):
+        raise ActiveBoxInputError("source_score_frame must be a ResonanceScoreFrame")
+    if not isinstance(config, ActiveBoxSelectionConfig):
+        raise ActiveBoxInputError("config must be an ActiveBoxSelectionConfig")
+    if not isinstance(decision, ActiveBoxSideDecision):
+        raise ActiveBoxInputError("decision must be an ActiveBoxSideDecision")
     expected = build_side_decision(
         source_score_frame, config, decision.side, decision.current_zone_key_id
     )

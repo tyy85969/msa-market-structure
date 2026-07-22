@@ -6,6 +6,7 @@ import pytest
 from msa.research.active_box import (
     ActiveBoxEventReason,
     ActiveBoxEventType,
+    ActiveBoxSelectionFrame,
     ActiveBoxSelectionHistory,
     build_active_box_event,
     build_selection_frame,
@@ -21,6 +22,7 @@ from tests.research.resonance.fixtures import H4_PRIMARY, T2, bar, custom_bundle
 from tests.research.resonance_scoring.fixtures import scorer, scoring_config, source_history
 
 from .fixtures import config, selection_history
+from .test_frame import _fully_resign_created_selection_price
 
 
 def _policy_history(cfg, source=None) -> ActiveBoxSelectionHistory:
@@ -96,6 +98,16 @@ def test_legal_pair_changed_history_has_atomic_freeze_create() -> None:
     assert tuple(event.event_type for event in changed.emitted_events)==(ActiveBoxEventType.FROZEN,ActiveBoxEventType.CREATED)
     assert changed.emitted_events[0].event_reason is changed.emitted_events[1].event_reason is ActiveBoxEventReason.PAIR_CHANGED
     assert changed.emitted_events[0].box_key_id!=changed.emitted_events[1].box_key_id
+    assert changed.active_box_snapshot.active_box.selection_price==changed.source_score_frame.source_frame.reference_price.price
+
+
+def test_fully_resigned_pair_changed_selection_price_attack_is_rejected() -> None:
+    history=_policy_history(config(minimum_selection_score=Decimal("0.25")))
+    changed=next(frame for frame in history.frames if len(frame.emitted_events)==2)
+    reference=changed.source_score_frame.source_frame.reference_price.price
+    payload=_fully_resign_created_selection_price(changed,reference-Decimal("1"))
+    with pytest.raises(Exception,match="formal creation result including selection price"):
+        ActiveBoxSelectionFrame.from_dict(payload)
 
 
 def test_legal_pair_unavailable_history_freezes_once() -> None:
@@ -119,6 +131,7 @@ def test_pair_can_reappear_after_formal_unavailable_freeze() -> None:
     assert recreated.emitted_events[0].event_type is ActiveBoxEventType.CREATED
     assert recreated.emitted_events[0].event_reason is ActiveBoxEventReason.INITIAL_PAIR
     assert recreated.lower_decision.current_zone_key_id is None and recreated.upper_decision.current_zone_key_id is None
+    assert recreated.active_box_snapshot.active_box.selection_price==recreated.source_score_frame.source_frame.reference_price.price
 
 
 def test_history_rejects_reset_current_keys_and_unfrozen_new_episode() -> None:
