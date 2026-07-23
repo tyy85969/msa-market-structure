@@ -32,6 +32,13 @@ MSA 是一个面向量化研究与 TradingView 指标研发的长期项目。项
 - 复杂研发：Branch / Pull Request / Review / Merge
 - 多 Agent 并行：按独立研究任务拆分，避免同时修改同一核心文件
 
+## Python MSA Core Alpha 入口
+
+C-007D 的研究型全链路入口位于 `msa.research.msa_core`：
+`MSACoreConfig` 组合 C-007A/B/C 的正式配置，`MSACorePipeline.run()` 生成
+不可变 `MSACoreRun`，`replay_msa_core_run()` 提供 Batch 等价和显式 AsOf
+Replay。该入口只输出可追溯的结构研究对象，不产生交易信号。
+
 ## 近期里程碑
 
 1. **Phase 0 — Repository Bootstrap**：固化项目规则、架构、决策、假设与验证规范

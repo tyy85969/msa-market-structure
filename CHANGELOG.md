@@ -57,6 +57,8 @@
 - Added score-frame Batch/Replay, strict serialization, and full-payload no-lookahead coverage without Active Box selection.
 - Added the C-007C causal Active Box contract layer for Zone eligibility, nearest-qualified hysteresis, formal StructureCluster projection, stable episode/snapshot identity, CREATED/FROZEN events, SelectionFrames, and immutable history validation without a selector state machine.
 - Added the stateless C-007C Active Box selector engine with causal create, observe, freeze, replace, Batch, Replay, deterministic-history, and no-lookahead coverage.
+- Added the C-007D stateless MSA Core Alpha pipeline composing the formal C-007A/B/C Batch histories into exact per-AsOf immutable Bundles and a deterministic research Run.
+- Added unified Replay with stage cross-audits, strict lineage/provenance validation, 100+ AsOf smoke coverage, and end-to-end full-payload no-lookahead acceptance.
 
 ### Added
 - 初始化 MSA 项目仓库。
