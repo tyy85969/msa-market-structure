@@ -4,15 +4,20 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from msa.research.msa_core import MSACoreRun
+from msa.research.active_box import (
+    ActiveBoxEvent,
+    ActiveBoxSelectionHistory,
+    ActiveBoxSnapshot,
+)
+from msa.research.msa_core import MSACoreFrameBundle, MSACoreRun
 
 from .causal_audit import (
-    _RUN_CODES,
     CausalAuditor,
     _fact,
     _finding,
     _payload,
     _report,
+    _resolve_config,
     _run_bounds,
 )
 from .contracts import (
@@ -28,6 +33,18 @@ from .errors import (
 from .identity import digest
 
 
+def _is_utc(value: object) -> bool:
+    try:
+        return (
+            type(value) is datetime
+            and value.tzinfo is not None
+            and value.utcoffset() is not None
+            and value.utcoffset().total_seconds() == 0
+        )
+    except (AttributeError, TypeError, ValueError):
+        return False
+
+
 def _runs(
     left: object, right: object
 ) -> tuple[MSACoreRun, MSACoreRun]:
@@ -38,8 +55,94 @@ def _runs(
     return left, right
 
 
-def _codes(extra: CausalAuditCode) -> tuple[CausalAuditCode, ...]:
-    return tuple(dict.fromkeys((*_RUN_CODES, extra)))
+def _inspect_comparison_parts(
+    run: MSACoreRun,
+    role: str,
+) -> tuple[
+    tuple[datetime, ...],
+    tuple[MSACoreFrameBundle, ...],
+    tuple[ActiveBoxEvent, ...],
+    tuple[ActiveBoxSnapshot, ...],
+]:
+    times = run.processing_times
+    if (
+        not isinstance(times, tuple)
+        or not times
+        or any(not _is_utc(item) for item in times)
+    ):
+        raise ValidationComparisonError(
+            f"{role} processing_times are not safely comparable"
+        )
+    try:
+        if any(
+            current <= previous
+            for previous, current in zip(times, times[1:])
+        ):
+            raise ValidationComparisonError(
+                f"{role} processing_times must be strictly increasing"
+            )
+    except TypeError as exc:
+        raise ValidationComparisonError(
+            f"{role} processing_times are not safely comparable"
+        ) from exc
+
+    bundles = run.frame_bundles
+    if (
+        not isinstance(bundles, tuple)
+        or any(
+            not isinstance(item, MSACoreFrameBundle)
+            or not _is_utc(item.as_of_time)
+            for item in bundles
+        )
+    ):
+        raise ValidationComparisonError(
+            f"{role} frame_bundles are not safely comparable"
+        )
+    bundle_times = tuple(item.as_of_time for item in bundles)
+    if len(set(bundle_times)) != len(bundle_times):
+        raise ValidationComparisonError(
+            f"{role} frame_bundles contain duplicate AsOf values"
+        )
+
+    history = run.active_box_history
+    if (
+        not isinstance(history, ActiveBoxSelectionHistory)
+        or not isinstance(history.events, tuple)
+        or not isinstance(history.frozen_boxes, tuple)
+        or any(
+            not isinstance(item, ActiveBoxEvent)
+            or not _is_utc(item.event_confirm_time)
+            for item in history.events
+        )
+        or any(
+            not isinstance(item, ActiveBoxSnapshot)
+            or not _is_utc(item.active_box.confirm_time)
+            for item in history.frozen_boxes
+        )
+    ):
+        raise ValidationComparisonError(
+            f"{role} Active Box ledger is not safely comparable"
+        )
+    return times, bundles, history.events, history.frozen_boxes
+
+
+def _comparison_parts(
+    run: MSACoreRun,
+    role: str,
+) -> tuple[
+    tuple[datetime, ...],
+    tuple[MSACoreFrameBundle, ...],
+    tuple[ActiveBoxEvent, ...],
+    tuple[ActiveBoxSnapshot, ...],
+]:
+    try:
+        return _inspect_comparison_parts(run, role)
+    except ValidationComparisonError:
+        raise
+    except (AttributeError, KeyError, TypeError, ValueError) as exc:
+        raise ValidationComparisonError(
+            f"{role} run is not safely comparable"
+        ) from exc
 
 
 def _bounds(
@@ -107,13 +210,7 @@ def compare_batch_replay(
         start=start,
         end=end,
         findings=tuple(findings),
-        codes=_codes(CausalAuditCode.BATCH_REPLAY_MISMATCH),
         config=auditor.config,
-        provenance=(
-            "msa.validation.comparison.compare_batch_replay",
-            f"batch_run_id={batch.run_id}",
-            f"replay_run_id={replayed.run_id}",
-        ),
     )
 
 
@@ -123,13 +220,20 @@ def compare_prefix(
     extended_run: MSACoreRun,
 ) -> CausalAuditReport:
     prefix, extended = _runs(prefix_run, extended_run)
-    prefix_times = prefix.processing_times
-    extended_times = extended.processing_times
+    (
+        prefix_times,
+        prefix_bundles,
+        prefix_events_ledger,
+        prefix_frozen_ledger,
+    ) = _comparison_parts(prefix, "prefix")
+    (
+        extended_times,
+        extended_bundles,
+        extended_events_ledger,
+        extended_frozen_ledger,
+    ) = _comparison_parts(extended, "extended")
     if (
-        not isinstance(prefix_times, tuple)
-        or not isinstance(extended_times, tuple)
-        or not prefix_times
-        or len(prefix_times) >= len(extended_times)
+        len(prefix_times) >= len(extended_times)
         or extended_times[: len(prefix_times)] != prefix_times
     ):
         raise ValidationComparisonError(
@@ -138,9 +242,9 @@ def compare_prefix(
     findings = _child_findings(auditor, prefix, extended)
     rewritten: list[str] = []
     extended_by_asof = {
-        bundle.as_of_time: bundle for bundle in extended.frame_bundles
+        bundle.as_of_time: bundle for bundle in extended_bundles
     }
-    for bundle in prefix.frame_bundles:
+    for bundle in prefix_bundles:
         counterpart = extended_by_asof.get(bundle.as_of_time)
         if (
             counterpart is None
@@ -148,22 +252,20 @@ def compare_prefix(
         ):
             rewritten.append(bundle.as_of_time.isoformat())
     prefix_events = tuple(
-        _payload(item) for item in prefix.active_box_history.events
+        _payload(item) for item in prefix_events_ledger
     )
     extended_old_events = tuple(
         _payload(item)
-        for item in extended.active_box_history.events
-        if isinstance(item.event_confirm_time, datetime)
-        and item.event_confirm_time <= prefix_times[-1]
+        for item in extended_events_ledger
+        if item.event_confirm_time <= prefix_times[-1]
     )
     prefix_frozen = tuple(
-        _payload(item) for item in prefix.active_box_history.frozen_boxes
+        _payload(item) for item in prefix_frozen_ledger
     )
     extended_old_frozen = tuple(
         _payload(item)
-        for item in extended.active_box_history.frozen_boxes
-        if isinstance(item.active_box.confirm_time, datetime)
-        and item.active_box.confirm_time <= prefix_times[-1]
+        for item in extended_frozen_ledger
+        if item.active_box.confirm_time <= prefix_times[-1]
     )
     if (
         prefix_events != extended_old_events
@@ -191,13 +293,7 @@ def compare_prefix(
         start=start,
         end=end,
         findings=tuple(findings),
-        codes=_codes(CausalAuditCode.PREFIX_REWRITE),
         config=auditor.config,
-        provenance=(
-            "msa.validation.comparison.compare_prefix",
-            f"prefix_run_id={prefix.run_id}",
-            f"extended_run_id={extended.run_id}",
-        ),
     )
 
 
@@ -217,20 +313,32 @@ def compare_shared_asof(
         raise ValidationComparisonError(
             "cutoff_time must be an aware UTC datetime"
         )
+    (
+        baseline_times,
+        baseline_bundles,
+        baseline_events_ledger,
+        baseline_frozen_ledger,
+    ) = _comparison_parts(baseline, "baseline")
+    (
+        _,
+        extended_bundles,
+        extended_events_ledger,
+        extended_frozen_ledger,
+    ) = _comparison_parts(extended, "extended")
     findings = _child_findings(auditor, baseline, extended)
     baseline_by_asof = {
         item.as_of_time: item
-        for item in baseline.frame_bundles
+        for item in baseline_bundles
         if item.as_of_time < cutoff_time
     }
     extended_by_asof = {
         item.as_of_time: item
-        for item in extended.frame_bundles
+        for item in extended_bundles
         if item.as_of_time < cutoff_time
     }
     shared = tuple(
         item
-        for item in baseline.processing_times
+        for item in baseline_times
         if item < cutoff_time and item in extended_by_asof
     )
     rewritten = [
@@ -241,22 +349,22 @@ def compare_shared_asof(
     ]
     baseline_events = tuple(
         _payload(item)
-        for item in baseline.active_box_history.events
+        for item in baseline_events_ledger
         if item.event_confirm_time < cutoff_time
     )
     extended_events = tuple(
         _payload(item)
-        for item in extended.active_box_history.events
+        for item in extended_events_ledger
         if item.event_confirm_time < cutoff_time
     )
     baseline_frozen = tuple(
         _payload(item)
-        for item in baseline.active_box_history.frozen_boxes
+        for item in baseline_frozen_ledger
         if item.active_box.confirm_time < cutoff_time
     )
     extended_frozen = tuple(
         _payload(item)
-        for item in extended.active_box_history.frozen_boxes
+        for item in extended_frozen_ledger
         if item.active_box.confirm_time < cutoff_time
     )
     if baseline_events != extended_events or baseline_frozen != extended_frozen:
@@ -282,13 +390,9 @@ def compare_shared_asof(
         start=start,
         end=end,
         findings=tuple(findings),
-        codes=_codes(CausalAuditCode.SHARED_ASOF_REWRITE),
         config=auditor.config,
-        provenance=(
-            "msa.validation.comparison.compare_shared_asof",
-            f"baseline_run_id={baseline.run_id}",
-            f"extended_run_id={extended.run_id}",
-            f"cutoff_time={cutoff_time.isoformat()}",
+        provenance_values=(
+            cutoff_time,
         ),
     )
 
@@ -298,7 +402,9 @@ def audit_batch_replay_equivalence(
     replay_run: MSACoreRun,
     config: CausalAuditConfig | None = None,
 ) -> CausalAuditReport:
-    return CausalAuditor(config or CausalAuditConfig()).compare_batch_replay(
+    return CausalAuditor(
+        _resolve_config(config)
+    ).compare_batch_replay(
         batch_run, replay_run
     )
 
@@ -308,7 +414,9 @@ def audit_prefix_stability(
     extended_run: MSACoreRun,
     config: CausalAuditConfig | None = None,
 ) -> CausalAuditReport:
-    return CausalAuditor(config or CausalAuditConfig()).compare_prefix(
+    return CausalAuditor(
+        _resolve_config(config)
+    ).compare_prefix(
         prefix_run, extended_run
     )
 
@@ -319,6 +427,8 @@ def audit_shared_asof_stability(
     cutoff_time: datetime,
     config: CausalAuditConfig | None = None,
 ) -> CausalAuditReport:
-    return CausalAuditor(config or CausalAuditConfig()).compare_shared_asof(
+    return CausalAuditor(
+        _resolve_config(config)
+    ).compare_shared_asof(
         baseline_run, extended_run, cutoff_time
     )

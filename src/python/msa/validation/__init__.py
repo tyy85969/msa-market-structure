@@ -11,6 +11,7 @@ from .comparison import (
     audit_shared_asof_stability,
 )
 from .contracts import (
+    CAUSAL_AUDIT_ASSUMPTIONS,
     FORMULA_STATUS_RESERVED,
     SCHEMA_VERSION,
     AuditSeverity,
@@ -27,6 +28,7 @@ from .contracts import (
     ValidationMetricInterpretation,
     ValidationMetricName,
     ValidationMetricUnit,
+    required_audit_codes,
 )
 from .errors import (
     CausalAuditError,
@@ -39,6 +41,7 @@ from .errors import (
 from .metric_registry import default_metric_registry
 
 __all__ = [
+    "CAUSAL_AUDIT_ASSUMPTIONS",
     "FORMULA_STATUS_RESERVED",
     "SCHEMA_VERSION",
     "AuditSeverity",
@@ -68,4 +71,5 @@ __all__ = [
     "audit_prefix_stability",
     "audit_shared_asof_stability",
     "default_metric_registry",
+    "required_audit_codes",
 ]

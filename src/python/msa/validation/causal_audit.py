@@ -5,6 +5,8 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime
+from decimal import Decimal
+from enum import Enum
 
 from msa.research.active_box import (
     ActiveBoxEvent,
@@ -34,6 +36,7 @@ from msa.research.resonance import (
 
 from .contracts import (
     AuditSeverity,
+    CAUSAL_AUDIT_ASSUMPTIONS,
     CausalAuditCheckResult,
     CausalAuditCode,
     CausalAuditConfig,
@@ -41,9 +44,14 @@ from .contracts import (
     CausalAuditFinding,
     CausalAuditKind,
     CausalAuditReport,
+    audit_entrypoint,
+    audit_provenance_keys,
+    audit_subject_key_count,
+    required_audit_codes,
 )
 from .errors import (
     CausalAuditError,
+    ValidationConfigurationError,
     ValidationInputError,
 )
 from .identity import digest, semantic_id
@@ -56,40 +64,6 @@ _AUDITABLE_ERRORS = (
     ValueError,
     AssertionError,
     RuntimeError,
-)
-_AUDIT_ASSUMPTIONS = (
-    "Only public C-007 contracts and public serialization payloads are audited",
-    "OriginTime never grants causal visibility before ConfirmTime",
-    "The auditor does not repair sort fill clip or mutate audited inputs",
-    "Audit success is not evidence of profitability or trading advantage",
-)
-_RUN_CODES = (
-    CausalAuditCode.FORMAL_CONTRACT_INVALID,
-    CausalAuditCode.PROCESSING_TIME_INVALID,
-    CausalAuditCode.DUPLICATE_ASOF,
-    CausalAuditCode.STAGE_FRAME_COUNT_MISMATCH,
-    CausalAuditCode.STAGE_ASOF_MISMATCH,
-    CausalAuditCode.SCORE_SOURCE_MISMATCH,
-    CausalAuditCode.SELECTION_SOURCE_MISMATCH,
-    CausalAuditCode.FUTURE_EVIDENCE,
-    CausalAuditCode.FUTURE_CONTEXT_STATE,
-    CausalAuditCode.FUTURE_REFERENCE_BAR,
-    CausalAuditCode.ORIGIN_USED_AS_VISIBILITY,
-    CausalAuditCode.ACTIVE_BOX_ASOF_MISMATCH,
-    CausalAuditCode.EVENT_TIME_MISMATCH,
-    CausalAuditCode.PROJECTION_TIME_MISMATCH,
-    CausalAuditCode.EPISODE_CREATED_TIME_MISMATCH,
-    CausalAuditCode.EVENT_LEDGER_MISMATCH,
-    CausalAuditCode.FROZEN_LEDGER_MISMATCH,
-    CausalAuditCode.FROZEN_EPISODE_REACTIVATED,
-    CausalAuditCode.RETAIN_PROJECTION_CHANGED,
-    CausalAuditCode.EPISODE_KEY_CHANGED,
-    CausalAuditCode.FINAL_BUNDLE_MISMATCH,
-    CausalAuditCode.REPORT_COUNT_MISMATCH,
-    CausalAuditCode.SOURCE_REPLAY_MISMATCH,
-    CausalAuditCode.SCORE_REBUILD_MISMATCH,
-    CausalAuditCode.ACTIVE_BOX_REBUILD_MISMATCH,
-    CausalAuditCode.UNSUPPORTED_TRADING_FIELD,
 )
 _TRADING_FIELDS = {
     "buy",
@@ -109,28 +83,87 @@ _TRADING_FIELDS = {
 }
 
 
-def _fact(key: str, value: object) -> CausalAuditFact:
-    if isinstance(value, datetime):
-        rendered = value.isoformat()
-    elif isinstance(value, bool):
-        rendered = "true" if value else "false"
-    elif value is None:
-        rendered = "null"
-    else:
-        rendered = str(value)
-    return CausalAuditFact(key=key, value=rendered)
+def _safe_text(value: object, field_name: str, max_length: int) -> str:
+    try:
+        if (
+            isinstance(value, str)
+            and value
+            and len(value) <= max_length
+        ):
+            return value
+    except _AUDITABLE_ERRORS:
+        pass
+    return f"invalid-{field_name}"
+
+
+def _safe_identifier(value: object, position: str) -> str:
+    return _safe_text(value, f"object-id-{position}", 512)
+
+
+def _render_fact_value(value: object, key: str) -> str:
+    try:
+        if type(value) is datetime:
+            rendered = value.isoformat()
+        elif isinstance(value, bool):
+            rendered = "true" if value else "false"
+        elif value is None:
+            rendered = "null"
+        elif isinstance(value, Enum):
+            return _render_fact_value(value.value, key)
+        elif type(value) in (int, Decimal):
+            rendered = str(value)
+        elif isinstance(value, str):
+            rendered = value
+        else:
+            rendered = f"invalid-fact-value-{key}"
+    except _AUDITABLE_ERRORS:
+        rendered = f"invalid-fact-value-{key}"
+    return _safe_text(rendered, f"fact-value-{key}", 512)
+
+
+def _fact(key: object, value: object) -> CausalAuditFact:
+    safe_key = _safe_text(key, "fact-key", 96)
+    return CausalAuditFact(
+        key=safe_key,
+        value=_render_fact_value(value, safe_key),
+    )
+
+
+def _resolve_config(config: object | None) -> CausalAuditConfig:
+    if config is None:
+        return CausalAuditConfig()
+    if not isinstance(config, CausalAuditConfig):
+        raise ValidationConfigurationError(
+            "config must be CausalAuditConfig or None"
+        )
+    try:
+        restored = CausalAuditConfig.from_dict(config.to_dict())
+    except _AUDITABLE_ERRORS as exc:
+        raise ValidationConfigurationError(
+            "config must be a strict round-trippable CausalAuditConfig"
+        ) from exc
+    if restored != config:
+        raise ValidationConfigurationError(
+            "config must be a strict round-trippable CausalAuditConfig"
+        )
+    return config
 
 
 def _finding(
     config: CausalAuditConfig,
     code: CausalAuditCode,
-    stage: str,
+    stage: object,
     *,
     as_of_time: datetime | None,
-    object_ids: tuple[str, ...],
+    object_ids: tuple[object, ...],
     facts: tuple[CausalAuditFact, ...],
 ) -> CausalAuditFinding:
-    bounded_ids = tuple(dict.fromkeys(object_ids))[: config.max_object_ids]
+    normalized_ids: list[str] = []
+    for index, value in enumerate(object_ids):
+        normalized = _safe_identifier(value, str(index))
+        if normalized not in normalized_ids:
+            normalized_ids.append(normalized)
+    bounded_ids = tuple(normalized_ids[: config.max_object_ids])
     if not bounded_ids:
         bounded_ids = ("unknown-audit-object",)
     bounded_facts = facts[: config.max_facts]
@@ -139,9 +172,11 @@ def _finding(
     payload = {
         "code": code.value,
         "severity": config.severity_for(code).value,
-        "stage": stage,
+        "stage": _safe_text(stage, "finding-stage", 96),
         "as_of_time": (
-            None if as_of_time is None else as_of_time.isoformat()
+            as_of_time.isoformat()
+            if _is_utc(as_of_time)
+            else None
         ),
         "object_ids": list(bounded_ids),
         "facts": [item.to_dict() for item in bounded_facts],
@@ -151,8 +186,12 @@ def _finding(
         finding_id=semantic_id("causal-audit-finding-v1-", payload),
         code=code,
         severity=config.severity_for(code),
-        stage=stage,
-        as_of_time=as_of_time,
+        stage=payload["stage"],
+        as_of_time=(
+            as_of_time
+            if payload["as_of_time"] is not None
+            else None
+        ),
         object_ids=bounded_ids,
         facts=bounded_facts,
     )
@@ -185,18 +224,24 @@ def _report(
     start: datetime,
     end: datetime,
     findings: tuple[CausalAuditFinding, ...],
-    codes: tuple[CausalAuditCode, ...],
     config: CausalAuditConfig,
-    provenance: tuple[str, ...],
+    provenance_values: tuple[object, ...] = (),
 ) -> CausalAuditReport:
-    unique_subjects = tuple(dict.fromkeys(subject_ids))
+    normalized_roles = tuple(
+        _safe_identifier(value, f"subject-{index}")
+        for index, value in enumerate(subject_ids)
+    )
+    unique_subjects = tuple(dict.fromkeys(normalized_roles))
     unique_findings = tuple(
         {
             item.finding_id: item
             for item in findings
         }.values()
     )
-    checks = tuple(_check(code, unique_findings) for code in codes)
+    checks = tuple(
+        _check(code, unique_findings)
+        for code in required_audit_codes(kind)
+    )
     errors = sum(
         item.severity is AuditSeverity.ERROR for item in unique_findings
     )
@@ -206,6 +251,36 @@ def _report(
     informational = sum(
         item.severity is AuditSeverity.INFORMATIONAL
         for item in unique_findings
+    )
+    provenance_keys = audit_provenance_keys(kind)
+    subject_count = audit_subject_key_count(kind)
+    if (
+        len(normalized_roles) != subject_count
+        or len(provenance_values)
+        != len(provenance_keys) - subject_count
+    ):
+        raise CausalAuditError(
+            "audit provenance values do not match audit kind"
+        )
+    rendered_values = (
+        *normalized_roles,
+        *(
+            _render_fact_value(value, key)
+            for key, value in zip(
+                provenance_keys[subject_count:],
+                provenance_values,
+                strict=True,
+            )
+        ),
+    )
+    provenance = (
+        audit_entrypoint(kind),
+        *(
+            f"{key}={value}"
+            for key, value in zip(
+                provenance_keys, rendered_values, strict=True
+            )
+        ),
     )
     identity_payload = {
         "audit_kind": kind.value,
@@ -219,7 +294,7 @@ def _report(
         "warning_count": warnings,
         "informational_count": informational,
         "config_snapshot": config.to_dict(),
-        "assumptions": list(_AUDIT_ASSUMPTIONS),
+        "assumptions": list(CAUSAL_AUDIT_ASSUMPTIONS),
         "provenance": list(provenance),
         "schema_version": 1,
     }
@@ -238,7 +313,7 @@ def _report(
         warning_count=warnings,
         informational_count=informational,
         config_snapshot=config,
-        assumptions=_AUDIT_ASSUMPTIONS,
+        assumptions=CAUSAL_AUDIT_ASSUMPTIONS,
         provenance=provenance,
     )
 
@@ -284,12 +359,15 @@ def _run_bounds(run: MSACoreRun) -> tuple[datetime, datetime]:
 
 
 def _is_utc(value: object) -> bool:
-    return (
-        isinstance(value, datetime)
-        and value.tzinfo is not None
-        and value.utcoffset() is not None
-        and value.utcoffset().total_seconds() == 0
-    )
+    try:
+        return (
+            type(value) is datetime
+            and value.tzinfo is not None
+            and value.utcoffset() is not None
+            and value.utcoffset().total_seconds() == 0
+        )
+    except _AUDITABLE_ERRORS:
+        return False
 
 
 def _trading_paths(value: object, path: str = "run") -> tuple[str, ...]:
@@ -527,7 +605,7 @@ def _append_bundle_findings(
             )
         )
     previous_snapshot: ActiveBoxSnapshot | None = None
-    frozen_keys: set[str] = set()
+    frozen_keys: list[str] = []
     for index, bundle in enumerate(bundles):
         if not isinstance(bundle, MSACoreFrameBundle):
             continue
@@ -793,7 +871,12 @@ def _append_bundle_findings(
                             facts=(_fact("result_status", event.resulting_box_snapshot.active_box.status.value),),
                         )
                     )
-                frozen_keys.add(event.box_key_id)
+                normalized_frozen_key = _safe_identifier(
+                    event.box_key_id,
+                    f"frozen-{index}-{len(frozen_keys)}",
+                )
+                if normalized_frozen_key not in frozen_keys:
+                    frozen_keys.append(normalized_frozen_key)
         snapshots: list[ActiveBoxSnapshot] = []
         if isinstance(selection.active_box_snapshot, ActiveBoxSnapshot):
             snapshots.append(selection.active_box_snapshot)
@@ -803,11 +886,31 @@ def _append_bundle_findings(
             if isinstance(event, ActiveBoxEvent)
             and isinstance(event.resulting_box_snapshot, ActiveBoxSnapshot)
         )
-        seen_snapshots: set[str] = set()
+        seen_snapshots: list[ActiveBoxSnapshot] = []
         for snapshot in snapshots:
-            if snapshot.box_snapshot_id in seen_snapshots:
+            if any(snapshot is item for item in seen_snapshots):
                 continue
-            seen_snapshots.add(snapshot.box_snapshot_id)
+            seen_snapshots.append(snapshot)
+            if snapshot.active_box.as_of_time != as_of:
+                findings.append(
+                    _finding(
+                        config,
+                        CausalAuditCode.ACTIVE_BOX_ASOF_MISMATCH,
+                        "bundle.active_box.snapshot",
+                        as_of_time=as_of,
+                        object_ids=(
+                            bundle.bundle_id,
+                            snapshot.box_snapshot_id,
+                        ),
+                        facts=(
+                            _fact(
+                                "active_box_asof",
+                                snapshot.active_box.as_of_time,
+                            ),
+                            _fact("bundle_asof", as_of),
+                        ),
+                    )
+                )
             if (
                 (
                     _is_utc(
@@ -871,27 +974,9 @@ def _append_bundle_findings(
                 )
         current = selection.active_box_snapshot
         if isinstance(current, ActiveBoxSnapshot):
-            if current.active_box.as_of_time != as_of:
-                findings.append(
-                    _finding(
-                        config,
-                        CausalAuditCode.ACTIVE_BOX_ASOF_MISMATCH,
-                        "bundle.active_box.current",
-                        as_of_time=as_of,
-                        object_ids=(
-                            bundle.bundle_id,
-                            current.box_snapshot_id,
-                        ),
-                        facts=(
-                            _fact(
-                                "active_box_asof",
-                                current.active_box.as_of_time,
-                            ),
-                            _fact("bundle_asof", as_of),
-                        ),
-                    )
-                )
-            if current.box_key_id in frozen_keys:
+            if _safe_identifier(
+                current.box_key_id, f"current-{index}"
+            ) in frozen_keys:
                 findings.append(
                     _finding(
                         config,
@@ -1157,15 +1242,9 @@ class CausalAuditor:
     config: CausalAuditConfig = CausalAuditConfig()
 
     def __post_init__(self) -> None:
-        if not isinstance(self.config, CausalAuditConfig):
-            raise ValidationInputError(
-                "CausalAuditor.config must be CausalAuditConfig"
-            )
-        restored = CausalAuditConfig.from_dict(self.config.to_dict())
-        if restored != self.config:
-            raise ValidationInputError(
-                "CausalAuditor.config must round-trip strictly"
-            )
+        object.__setattr__(
+            self, "config", _resolve_config(self.config)
+        )
 
     def audit_run(self, run: MSACoreRun) -> CausalAuditReport:
         if not isinstance(run, MSACoreRun):
@@ -1211,11 +1290,9 @@ class CausalAuditor:
             start=start,
             end=end,
             findings=tuple(findings),
-            codes=_RUN_CODES,
             config=self.config,
-            provenance=(
-                "msa.validation.causal_audit.CausalAuditor.audit_run",
-                f"subject_payload_sha256={digest(payload) if payload is not None else 'unavailable'}",
+            provenance_values=(
+                digest(payload) if payload is not None else "unavailable",
             ),
         )
 
@@ -1270,21 +1347,11 @@ class CausalAuditor:
         comparison = compare_batch_replay(self, batch, replayed)
         return _report(
             kind=CausalAuditKind.PIPELINE_CAUSALITY,
-            subject_ids=comparison.subject_ids,
+            subject_ids=(batch.run_id, replayed.run_id),
             start=comparison.started_as_of_time,
             end=comparison.ended_as_of_time,
             findings=comparison.findings,
-            codes=tuple(
-                dict.fromkeys(
-                    (*_RUN_CODES, CausalAuditCode.BATCH_REPLAY_MISMATCH)
-                )
-            ),
             config=self.config,
-            provenance=(
-                "msa.validation.causal_audit.CausalAuditor.audit_pipeline",
-                f"batch_run_id={batch.run_id}",
-                f"replay_run_id={replayed.run_id}",
-            ),
         )
 
 
@@ -1292,7 +1359,7 @@ def audit_msa_core_run(
     run: MSACoreRun,
     config: CausalAuditConfig | None = None,
 ) -> CausalAuditReport:
-    return CausalAuditor(config or CausalAuditConfig()).audit_run(run)
+    return CausalAuditor(_resolve_config(config)).audit_run(run)
 
 
 def audit_pipeline_causality(
@@ -1300,6 +1367,6 @@ def audit_pipeline_causality(
     source_input: ResonanceFrameInput,
     config: CausalAuditConfig | None = None,
 ) -> CausalAuditReport:
-    return CausalAuditor(config or CausalAuditConfig()).audit_pipeline(
+    return CausalAuditor(_resolve_config(config)).audit_pipeline(
         pipeline, source_input
     )

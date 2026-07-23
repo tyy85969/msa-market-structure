@@ -228,6 +228,150 @@ class CausalAuditKind(_ValidationEnum):
     PIPELINE_CAUSALITY = "PIPELINE_CAUSALITY"
 
 
+CAUSAL_AUDIT_ASSUMPTIONS = (
+    "Only public C-007 contracts and public serialization payloads are audited",
+    "OriginTime never grants causal visibility before ConfirmTime",
+    "The auditor does not repair sort fill clip or mutate audited inputs",
+    "Audit success is not evidence of profitability or trading advantage",
+)
+
+_SINGLE_RUN_AUDIT_CODES = (
+    CausalAuditCode.FORMAL_CONTRACT_INVALID,
+    CausalAuditCode.PROCESSING_TIME_INVALID,
+    CausalAuditCode.DUPLICATE_ASOF,
+    CausalAuditCode.STAGE_FRAME_COUNT_MISMATCH,
+    CausalAuditCode.STAGE_ASOF_MISMATCH,
+    CausalAuditCode.SCORE_SOURCE_MISMATCH,
+    CausalAuditCode.SELECTION_SOURCE_MISMATCH,
+    CausalAuditCode.FUTURE_EVIDENCE,
+    CausalAuditCode.FUTURE_CONTEXT_STATE,
+    CausalAuditCode.FUTURE_REFERENCE_BAR,
+    CausalAuditCode.ORIGIN_USED_AS_VISIBILITY,
+    CausalAuditCode.ACTIVE_BOX_ASOF_MISMATCH,
+    CausalAuditCode.EVENT_TIME_MISMATCH,
+    CausalAuditCode.PROJECTION_TIME_MISMATCH,
+    CausalAuditCode.EPISODE_CREATED_TIME_MISMATCH,
+    CausalAuditCode.EVENT_LEDGER_MISMATCH,
+    CausalAuditCode.FROZEN_LEDGER_MISMATCH,
+    CausalAuditCode.FROZEN_EPISODE_REACTIVATED,
+    CausalAuditCode.RETAIN_PROJECTION_CHANGED,
+    CausalAuditCode.EPISODE_KEY_CHANGED,
+    CausalAuditCode.FINAL_BUNDLE_MISMATCH,
+    CausalAuditCode.REPORT_COUNT_MISMATCH,
+    CausalAuditCode.SOURCE_REPLAY_MISMATCH,
+    CausalAuditCode.SCORE_REBUILD_MISMATCH,
+    CausalAuditCode.ACTIVE_BOX_REBUILD_MISMATCH,
+    CausalAuditCode.UNSUPPORTED_TRADING_FIELD,
+)
+
+_AUDIT_KIND_EXTRA_CODE = {
+    CausalAuditKind.SINGLE_RUN: (),
+    CausalAuditKind.BATCH_REPLAY: (
+        CausalAuditCode.BATCH_REPLAY_MISMATCH,
+    ),
+    CausalAuditKind.PREFIX_STABILITY: (
+        CausalAuditCode.PREFIX_REWRITE,
+    ),
+    CausalAuditKind.SHARED_ASOF_STABILITY: (
+        CausalAuditCode.SHARED_ASOF_REWRITE,
+    ),
+    CausalAuditKind.PIPELINE_CAUSALITY: (
+        CausalAuditCode.BATCH_REPLAY_MISMATCH,
+    ),
+}
+
+_AUDIT_ENTRYPOINT = {
+    CausalAuditKind.SINGLE_RUN: (
+        "msa.validation.causal_audit.CausalAuditor.audit_run"
+    ),
+    CausalAuditKind.BATCH_REPLAY: (
+        "msa.validation.comparison.compare_batch_replay"
+    ),
+    CausalAuditKind.PREFIX_STABILITY: (
+        "msa.validation.comparison.compare_prefix"
+    ),
+    CausalAuditKind.SHARED_ASOF_STABILITY: (
+        "msa.validation.comparison.compare_shared_asof"
+    ),
+    CausalAuditKind.PIPELINE_CAUSALITY: (
+        "msa.validation.causal_audit.CausalAuditor.audit_pipeline"
+    ),
+}
+
+_AUDIT_PROVENANCE_KEYS = {
+    CausalAuditKind.SINGLE_RUN: (
+        "subject_run_id",
+        "subject_payload_sha256",
+    ),
+    CausalAuditKind.BATCH_REPLAY: (
+        "batch_run_id",
+        "replay_run_id",
+    ),
+    CausalAuditKind.PREFIX_STABILITY: (
+        "prefix_run_id",
+        "extended_run_id",
+    ),
+    CausalAuditKind.SHARED_ASOF_STABILITY: (
+        "baseline_run_id",
+        "extended_run_id",
+        "cutoff_time",
+    ),
+    CausalAuditKind.PIPELINE_CAUSALITY: (
+        "batch_run_id",
+        "replay_run_id",
+    ),
+}
+
+_AUDIT_SUBJECT_KEY_COUNT = {
+    CausalAuditKind.SINGLE_RUN: 1,
+    CausalAuditKind.BATCH_REPLAY: 2,
+    CausalAuditKind.PREFIX_STABILITY: 2,
+    CausalAuditKind.SHARED_ASOF_STABILITY: 2,
+    CausalAuditKind.PIPELINE_CAUSALITY: 2,
+}
+
+
+def required_audit_codes(
+    audit_kind: CausalAuditKind,
+) -> tuple[CausalAuditCode, ...]:
+    """Return the authoritative ordered check set for an audit kind."""
+
+    if not isinstance(audit_kind, CausalAuditKind):
+        raise ValidationInputError(
+            "audit_kind must be CausalAuditKind"
+        )
+    return (
+        *_SINGLE_RUN_AUDIT_CODES,
+        *_AUDIT_KIND_EXTRA_CODE[audit_kind],
+    )
+
+
+def audit_entrypoint(audit_kind: CausalAuditKind) -> str:
+    if not isinstance(audit_kind, CausalAuditKind):
+        raise ValidationInputError(
+            "audit_kind must be CausalAuditKind"
+        )
+    return _AUDIT_ENTRYPOINT[audit_kind]
+
+
+def audit_provenance_keys(
+    audit_kind: CausalAuditKind,
+) -> tuple[str, ...]:
+    if not isinstance(audit_kind, CausalAuditKind):
+        raise ValidationInputError(
+            "audit_kind must be CausalAuditKind"
+        )
+    return _AUDIT_PROVENANCE_KEYS[audit_kind]
+
+
+def audit_subject_key_count(audit_kind: CausalAuditKind) -> int:
+    if not isinstance(audit_kind, CausalAuditKind):
+        raise ValidationInputError(
+            "audit_kind must be CausalAuditKind"
+        )
+    return _AUDIT_SUBJECT_KEY_COUNT[audit_kind]
+
+
 class ValidationMetricName(_ValidationEnum):
     CONFIRMATION_DELAY_BARS = "CONFIRMATION_DELAY_BARS"
     CONFIRMATION_DELAY_ATR = "CONFIRMATION_DELAY_ATR"
@@ -554,6 +698,12 @@ class CausalAuditCheckResult:
             ValidationInputError,
             max_length=96,
         )
+        try:
+            CausalAuditCode(self.check_name)
+        except (TypeError, ValueError) as exc:
+            raise ValidationInputError(
+                f"{name}.check_name must be a CausalAuditCode value"
+            ) from exc
         _boolean(self.passed, f"{name}.passed", ValidationInputError)
         _text_tuple(
             self.finding_ids,
@@ -683,6 +833,17 @@ class CausalAuditReport:
             raise ValidationInputError(
                 "executed_checks must contain CausalAuditCheckResult"
             )
+        required_check_names = tuple(
+            item.value for item in required_audit_codes(self.audit_kind)
+        )
+        actual_check_names = tuple(
+            item.check_name for item in self.executed_checks
+        )
+        if actual_check_names != required_check_names:
+            raise ValidationInputError(
+                "executed_checks must exactly match the authoritative "
+                "ordered check set for audit_kind"
+            )
         if not isinstance(self.findings, tuple) or any(
             not isinstance(item, CausalAuditFinding)
             for item in self.findings
@@ -693,15 +854,31 @@ class CausalAuditReport:
         finding_ids = tuple(item.finding_id for item in self.findings)
         if len(set(finding_ids)) != len(finding_ids):
             raise ValidationInputError("finding IDs must be unique")
+        finding_by_id = {
+            item.finding_id: item for item in self.findings
+        }
         referenced = tuple(
             finding_id
             for check in self.executed_checks
             for finding_id in check.finding_ids
         )
-        if sorted(referenced) != sorted(finding_ids):
+        if (
+            len(referenced) != len(set(referenced))
+            or set(referenced) != set(finding_ids)
+        ):
             raise ValidationInputError(
                 "executed checks must reference every finding exactly once"
             )
+        for check in self.executed_checks:
+            for finding_id in check.finding_ids:
+                finding = finding_by_id.get(finding_id)
+                if (
+                    finding is None
+                    or finding.code.value != check.check_name
+                ):
+                    raise ValidationInputError(
+                        "each check may reference only findings with its code"
+                    )
         expected = {
             AuditSeverity.ERROR: sum(
                 item.severity is AuditSeverity.ERROR for item in self.findings
@@ -755,6 +932,11 @@ class CausalAuditReport:
             non_empty=True,
             unique=True,
         )
+        if self.assumptions != CAUSAL_AUDIT_ASSUMPTIONS:
+            raise ValidationInputError(
+                "assumptions must exactly match the authoritative audit "
+                "assumptions"
+            )
         _text_tuple(
             self.provenance,
             f"{name}.provenance",
@@ -762,6 +944,38 @@ class CausalAuditReport:
             non_empty=True,
             unique=True,
         )
+        if self.provenance[0] != audit_entrypoint(self.audit_kind):
+            raise ValidationInputError(
+                "provenance must begin with the authoritative public entry"
+            )
+        parsed_provenance: list[tuple[str, str]] = []
+        for item in self.provenance[1:]:
+            if "=" not in item:
+                raise ValidationInputError(
+                    "provenance facts must use key=value form"
+                )
+            key, value = item.split("=", 1)
+            if not key or not value:
+                raise ValidationInputError(
+                    "provenance facts must use non-empty key=value form"
+                )
+            parsed_provenance.append((key, value))
+        expected_keys = audit_provenance_keys(self.audit_kind)
+        if tuple(key for key, _ in parsed_provenance) != expected_keys:
+            raise ValidationInputError(
+                "provenance facts must exactly match the authoritative "
+                "ordered keys for audit_kind"
+            )
+        subject_value_count = audit_subject_key_count(self.audit_kind)
+        bound_subjects = tuple(
+            value
+            for _, value in parsed_provenance[:subject_value_count]
+        )
+        unique_bound_subjects = tuple(dict.fromkeys(bound_subjects))
+        if unique_bound_subjects != self.subject_ids:
+            raise ValidationInputError(
+                "provenance must bind every and only report subject ID"
+            )
         require_semantic_id(
             self.audit_report_id,
             prefix="causal-audit-report-v1-",

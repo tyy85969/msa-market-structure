@@ -22,7 +22,7 @@ def test_report_ids_and_complete_digests_are_frozen() -> None:
     shared = value.compare_shared_asof(baseline, extended, cutoff)
     assert single.audit_report_id == (
         "causal-audit-report-v1-"
-        "d89aad2947511fac190984eee5f01be2a3738cb32a9013ac278fbd72ba9fd277"
+        "559081389d9601f971bd7b61d1c370a464105a9dbcd739fe1196dd95c7c445d1"
     )
     assert batch.audit_report_id == (
         "causal-audit-report-v1-"
@@ -37,10 +37,10 @@ def test_report_ids_and_complete_digests_are_frozen() -> None:
         "e5e64bbcc148947f4974d7ac3500f085ab3783303045cad3287b80e31bde1c92"
     )
     assert digest(single.to_dict()) == (
-        "1207b1a51ba7043d42eda8491e7375dd65d29687b47dede74ef5a885910022d2"
+        "d631f1d8acbef4fe172d96db7707f325a166eb09c6b89c641cc9229bad96d588"
     )
     assert digest(mutation_report("future_evidence", value).to_dict()) == (
-        "ce455ffcdfb1383d9a31585b8c40923610e5048a2f67f9c2df7effbf2dd426df"
+        "e06c4f592dc39869989771551cafe45b2666323ecdd861b8a1722a9d3633efb1"
     )
 
 

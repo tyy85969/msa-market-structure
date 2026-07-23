@@ -58,6 +58,16 @@ contracts expose no mutable list or dictionary fields.
 WARNING and INFORMATIONAL treatment is configured explicitly by formal audit
 code.
 
+Each `CausalAuditKind` has one authoritative ordered check set defined by the
+contract layer. A report must execute that set exactly: callers cannot delete,
+repeat, reorder, rename, or append checks, even if they recompute every
+semantic ID. Every finding is referenced exactly once and only by the check
+whose name equals the finding code.
+
+The assumptions tuple, public-entrypoint provenance value, ordered provenance
+keys, and subject-ID bindings are also contract facts. Re-signing a payload
+after changing any of them does not make the report valid.
+
 ## 6. Audit codes
 
 Formal codes cover invalid contracts and schedules, duplicate AsOf values,
@@ -70,6 +80,11 @@ AsOf rewrites, and unsupported trading fields.
 Findings contain a fixed code, configured severity, stage, optional AsOf,
 bounded object IDs, and bounded deterministic facts. They never embed a full
 recursive Run.
+
+Illegal, unhashable, or overlong inspected IDs and fact values are replaced by
+bounded deterministic sentinels. The auditor does not call arbitrary object
+`repr()` or allow a malformed nested ID to escape as an ordinary Python
+exception.
 
 ## 7. Single Run audit
 
@@ -160,6 +175,14 @@ deterministic AsOf bounds, the audit raises `CausalAuditError`; it never
 returns PASS. Public entrypoints do not intentionally leak `AttributeError`,
 `KeyError`, `TypeError`, or `AssertionError`.
 
+All entrypoints resolve configuration identically. Only `None` requests the
+default; falsy non-config values and post-construction mutations raise
+`ValidationConfigurationError`. Prefix and shared-AsOf comparisons validate
+schedules, Bundle AsOf keys, events, frozen snapshots, and their comparison
+times before building maps or applying cutoff relationships. If that
+relationship cannot be determined safely, they raise
+`ValidationComparisonError`.
+
 ## 19. No automatic data repair
 
 The auditor never sorts schedules, removes Frames, deduplicates events, fills
@@ -172,6 +195,9 @@ Evidence state ConfirmTime, TimeframeState ConfirmTime, and reference-bar
 AvailableTime must not follow the Bundle AsOf. OriginTime is retained for
 historical context but never grants visibility. Active Box events occur at
 the current AsOf, and projection selection time cannot be in the future.
+Every current and event-result Active Box snapshot, including CREATED and
+FROZEN results, must carry an Active Box AsOf exactly equal to its Bundle
+AsOf; both past and future offsets fail.
 
 ## 21. Known limitations
 
