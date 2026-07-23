@@ -59,6 +59,7 @@
 - Added the stateless C-007C Active Box selector engine with causal create, observe, freeze, replace, Batch, Replay, deterministic-history, and no-lookahead coverage.
 - Added the C-007D stateless MSA Core Alpha pipeline composing the formal C-007A/B/C Batch histories into exact per-AsOf immutable Bundles and a deterministic research Run.
 - Added unified Replay with stage cross-audits, strict lineage/provenance validation, 100+ AsOf smoke coverage, and end-to-end full-payload no-lookahead acceptance.
+- Added the independent C-008A causal audit contracts, complete-payload Run comparisons, deterministic mutation harness, synthetic scenario baselines, and reserved metric registry without changing C-007 behavior.
 
 ### Added
 - 初始化 MSA 项目仓库。

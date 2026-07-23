@@ -1,0 +1,71 @@
+"""Public independent C-008A causal validation API."""
+
+from .causal_audit import (
+    CausalAuditor,
+    audit_msa_core_run,
+    audit_pipeline_causality,
+)
+from .comparison import (
+    audit_batch_replay_equivalence,
+    audit_prefix_stability,
+    audit_shared_asof_stability,
+)
+from .contracts import (
+    FORMULA_STATUS_RESERVED,
+    SCHEMA_VERSION,
+    AuditSeverity,
+    CausalAuditCheckResult,
+    CausalAuditCode,
+    CausalAuditConfig,
+    CausalAuditFact,
+    CausalAuditFinding,
+    CausalAuditKind,
+    CausalAuditReport,
+    MetricDefinition,
+    SyntheticScenarioDescriptor,
+    SyntheticScenarioKind,
+    ValidationMetricInterpretation,
+    ValidationMetricName,
+    ValidationMetricUnit,
+)
+from .errors import (
+    CausalAuditError,
+    MSAValidationError,
+    ValidationComparisonError,
+    ValidationConfigurationError,
+    ValidationInputError,
+    ValidationSerializationError,
+)
+from .metric_registry import default_metric_registry
+
+__all__ = [
+    "FORMULA_STATUS_RESERVED",
+    "SCHEMA_VERSION",
+    "AuditSeverity",
+    "CausalAuditCheckResult",
+    "CausalAuditCode",
+    "CausalAuditConfig",
+    "CausalAuditError",
+    "CausalAuditFact",
+    "CausalAuditFinding",
+    "CausalAuditKind",
+    "CausalAuditReport",
+    "CausalAuditor",
+    "MSAValidationError",
+    "MetricDefinition",
+    "SyntheticScenarioDescriptor",
+    "SyntheticScenarioKind",
+    "ValidationComparisonError",
+    "ValidationConfigurationError",
+    "ValidationInputError",
+    "ValidationMetricInterpretation",
+    "ValidationMetricName",
+    "ValidationMetricUnit",
+    "ValidationSerializationError",
+    "audit_batch_replay_equivalence",
+    "audit_msa_core_run",
+    "audit_pipeline_causality",
+    "audit_prefix_stability",
+    "audit_shared_asof_stability",
+    "default_metric_registry",
+]
