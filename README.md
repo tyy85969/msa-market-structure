@@ -39,6 +39,14 @@ C-007D 的研究型全链路入口位于 `msa.research.msa_core`：
 不可变 `MSACoreRun`，`replay_msa_core_run()` 提供 Batch 等价和显式 AsOf
 Replay。该入口只输出可追溯的结构研究对象，不产生交易信号。
 
+## Independent causal audit
+
+C-008A 的独立验证入口位于 `msa.validation`。`CausalAuditor` 只读取公开
+C-007 合同和完整序列化 Payload，并通过公开 replay/Batch API 交叉审计
+单 Run、Batch/Replay、未来追加前缀与 Extra AsOf 共享前缀。该模块不会
+修复被审计对象，不计算 C-008B 指标公式，也不产生任何交易行为。框架说明
+见 `docs/validation/causal_audit_framework.md`。
+
 ## 近期里程碑
 
 1. **Phase 0 — Repository Bootstrap**：固化项目规则、架构、决策、假设与验证规范
