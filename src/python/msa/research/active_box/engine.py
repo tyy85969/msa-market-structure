@@ -30,6 +30,43 @@ from .policy import build_side_decision
 from .projection import project_zone
 
 
+def _validate_selector_config(
+    value: object,
+) -> ActiveBoxSelectionConfig:
+    if not isinstance(value, ActiveBoxSelectionConfig):
+        raise ActiveBoxEngineError(
+            "config must be an ActiveBoxSelectionConfig"
+        )
+    try:
+        restored = ActiveBoxSelectionConfig.from_dict(value.to_dict())
+    except (
+        AttributeError,
+        KeyError,
+        AssertionError,
+        TypeError,
+        ValueError,
+        RuntimeError,
+    ) as exc:
+        raise ActiveBoxEngineError(
+            "config is not a formally valid ActiveBoxSelectionConfig"
+        ) from exc
+    if restored != value:
+        raise ActiveBoxEngineError(
+            "config payload is not formally self-consistent"
+        )
+    return value
+
+
+def _selector_config(selector: ActiveBoxSelector) -> ActiveBoxSelectionConfig:
+    try:
+        value = selector.config
+    except AttributeError as exc:
+        raise ActiveBoxEngineError(
+            "selector config is missing or internally invalid"
+        ) from exc
+    return _validate_selector_config(value)
+
+
 def _symbol(frame: ResonanceScoreFrame) -> str:
     return frame.source_frame.config_snapshot.symbol
 
@@ -64,6 +101,43 @@ def _validate_score_frame(
             "selector config symbol conflicts with source ScoreFrame"
         )
     return frame
+
+
+def _validate_score_history(
+    value: object,
+    config: ActiveBoxSelectionConfig,
+) -> ResonanceScoreHistory:
+    if not isinstance(value, ResonanceScoreHistory):
+        raise ActiveBoxEngineError(
+            "source_score_history must be a ResonanceScoreHistory"
+        )
+    try:
+        restored = ResonanceScoreHistory.from_dict(value.to_dict())
+    except (
+        AttributeError,
+        KeyError,
+        AssertionError,
+        TypeError,
+        ValueError,
+        RuntimeError,
+    ) as exc:
+        raise ActiveBoxEngineError(
+            "source_score_history is not a formally valid "
+            "ResonanceScoreHistory"
+        ) from exc
+    if restored != value:
+        raise ActiveBoxEngineError(
+            "source_score_history payload is not formally self-consistent"
+        )
+    if not restored.frames:
+        raise ActiveBoxEngineError(
+            "source_score_history.frames must not be empty"
+        )
+    if any(_symbol(frame) != config.symbol for frame in restored.frames):
+        raise ActiveBoxEngineError(
+            "selector config symbol conflicts with source ScoreHistory"
+        )
+    return value
 
 
 def _validate_previous(
@@ -197,18 +271,16 @@ class ActiveBoxSelector:
     config: ActiveBoxSelectionConfig
 
     def __post_init__(self) -> None:
-        if not isinstance(self.config, ActiveBoxSelectionConfig):
-            raise ActiveBoxEngineError(
-                "config must be an ActiveBoxSelectionConfig"
-            )
+        _validate_selector_config(self.config)
 
     def select_frame(
         self,
         source_score_frame: ResonanceScoreFrame,
         previous_active: ActiveBoxSnapshot | None = None,
     ) -> ActiveBoxSelectionFrame:
-        frame = _validate_score_frame(source_score_frame, self.config)
-        previous = _validate_previous(previous_active, frame, self.config)
+        config = _selector_config(self)
+        frame = _validate_score_frame(source_score_frame, config)
+        previous = _validate_previous(previous_active, frame, config)
         current_lower = (
             None if previous is None else previous.observed_lower_zone_key_id
         )
@@ -216,10 +288,10 @@ class ActiveBoxSelector:
             None if previous is None else previous.observed_upper_zone_key_id
         )
         lower_decision = build_side_decision(
-            frame, self.config, BoundarySide.LOWER, current_lower
+            frame, config, BoundarySide.LOWER, current_lower
         )
         upper_decision = build_side_decision(
-            frame, self.config, BoundarySide.UPPER, current_upper
+            frame, config, BoundarySide.UPPER, current_upper
         )
         lower_zone = _resolve_selected_zone(frame, lower_decision)
         upper_zone = _resolve_selected_zone(frame, upper_decision)
@@ -230,7 +302,7 @@ class ActiveBoxSelector:
         if previous is None:
             if complete:
                 active = _create_snapshot(
-                    frame, lower_zone, upper_zone, self.config
+                    frame, lower_zone, upper_zone, config
                 )
                 events = (
                     build_active_box_event(
@@ -271,7 +343,7 @@ class ActiveBoxSelector:
             else:
                 frozen = freeze_active_box_snapshot(frame, previous)
                 active = _create_snapshot(
-                    frame, lower_zone, upper_zone, self.config
+                    frame, lower_zone, upper_zone, config
                 )
                 events = (
                     build_active_box_event(
@@ -292,28 +364,18 @@ class ActiveBoxSelector:
             upper_decision=upper_decision,
             active_box_snapshot=active,
             emitted_events=events,
-            config=self.config,
+            config=config,
         )
 
     def build_batch(
         self,
         source_score_history: ResonanceScoreHistory,
     ) -> ActiveBoxSelectionHistory:
-        if not isinstance(source_score_history, ResonanceScoreHistory):
-            raise ActiveBoxEngineError(
-                "source_score_history must be a ResonanceScoreHistory"
-            )
-        if not source_score_history.frames:
-            raise ActiveBoxEngineError(
-                "source_score_history.frames must not be empty"
-            )
-        if _symbol(source_score_history.frames[0]) != self.config.symbol:
-            raise ActiveBoxEngineError(
-                "selector config symbol conflicts with source ScoreHistory"
-            )
+        config = _selector_config(self)
+        history = _validate_score_history(source_score_history, config)
         frames: list[ActiveBoxSelectionFrame] = []
         previous: ActiveBoxSnapshot | None = None
-        for score_frame in source_score_history.frames:
+        for score_frame in history.frames:
             selected = self.select_frame(score_frame, previous)
             frames.append(selected)
             previous = selected.active_box_snapshot
@@ -331,8 +393,8 @@ class ActiveBoxSelector:
             final_frame=result[-1],
             events=events,
             frozen_boxes=frozen,
-            source_score_history=source_score_history,
-            config_snapshot=self.config,
+            source_score_history=history,
+            config_snapshot=config,
         )
 
 
@@ -342,4 +404,5 @@ def build_active_box_history(
 ) -> ActiveBoxSelectionHistory:
     if not isinstance(selector, ActiveBoxSelector):
         raise ActiveBoxEngineError("selector must be an ActiveBoxSelector")
+    _selector_config(selector)
     return selector.build_batch(source_score_history)

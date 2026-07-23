@@ -1,3 +1,5 @@
+from copy import deepcopy
+
 import pytest
 
 from msa.research.active_box import (
@@ -9,6 +11,43 @@ from msa.research.resonance import ResonanceFrameHistory, ResonanceScoreHistory
 from tests.research.resonance_scoring.fixtures import scorer
 
 from .fixtures import replay_with_extra, score_history, selector
+
+
+def _corrupt_explicit_replay(case: str) -> ResonanceScoreHistory:
+    replay = deepcopy(replay_with_extra())
+    if case == "frames-string":
+        object.__setattr__(replay, "frames", "invalid")
+    elif case == "original-payload":
+        object.__setattr__(
+            replay.frames[0], "report", replay.frames[1].report
+        )
+    elif case == "relative-order":
+        object.__setattr__(
+            replay,
+            "frames",
+            (replay.frames[1], replay.frames[0], *replay.frames[2:]),
+        )
+    elif case == "time-reversal":
+        object.__setattr__(
+            replay.frames[1], "as_of_time", replay.frames[0].as_of_time
+        )
+    elif case == "duplicate-id":
+        object.__setattr__(
+            replay.frames[1],
+            "score_frame_id",
+            replay.frames[0].score_frame_id,
+        )
+    elif case == "unhashable-id":
+        object.__setattr__(replay.frames[0], "score_frame_id", [])
+    elif case == "source-mapping-conflict":
+        object.__setattr__(
+            replay.frames[0],
+            "source_frame",
+            replay.frames[1].source_frame,
+        )
+    else:  # pragma: no cover - helper guard
+        raise AssertionError(case)
+    return replay
 
 
 def test_default_replay_is_byte_equivalent_to_batch() -> None:
@@ -57,3 +96,40 @@ def test_explicit_replay_scoring_config_must_match() -> None:
     assert isinstance(different, ResonanceScoreHistory)
     with pytest.raises(ActiveBoxReplayError, match="config"):
         replay_active_box_history(selector(), source, different)
+
+
+@pytest.mark.parametrize(
+    "case",
+    [
+        "frames-string",
+        "original-payload",
+        "relative-order",
+        "time-reversal",
+        "duplicate-id",
+        "unhashable-id",
+        "source-mapping-conflict",
+    ],
+)
+def test_explicit_replay_corruption_fails_closed(case) -> None:
+    with pytest.raises(ActiveBoxReplayError):
+        replay_active_box_history(
+            selector(), score_history(), _corrupt_explicit_replay(case)
+        )
+
+
+def test_extra_frame_acceptance_preserves_full_prefix_order_and_source() -> None:
+    value = selector()
+    source = score_history()
+    replay = replay_with_extra()
+    baseline = value.build_batch(source)
+    result = replay_active_box_history(value, source, replay)
+    assert [frame.to_dict() for frame in result.frames[:2]] == [
+        frame.to_dict() for frame in baseline.frames[:2]
+    ]
+    assert tuple(iter_replay_active_box_frames(value, source, replay)) == (
+        result.frames
+    )
+    assert result.source_score_history.to_dict() == replay.to_dict()
+    assert result.frames[2].source_score_frame.to_dict() == (
+        replay.frames[2].to_dict()
+    )

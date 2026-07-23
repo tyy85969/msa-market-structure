@@ -7,18 +7,46 @@ from collections.abc import Iterator
 from msa.research.resonance import ResonanceScoreHistory
 
 from .contracts import ActiveBoxSelectionFrame, ActiveBoxSelectionHistory
-from .engine import ActiveBoxSelector
-from .errors import ActiveBoxReplayError
+from .engine import ActiveBoxSelector, _selector_config
+from .errors import (
+    ActiveBoxContractError,
+    ActiveBoxEngineError,
+    ActiveBoxReplayError,
+)
 
 
-def _validate_replay_history(
-    source: ResonanceScoreHistory,
-    replay: object,
+def _validate_formal_replay_history(
+    value: object,
+    field_name: str,
 ) -> ResonanceScoreHistory:
-    if not isinstance(replay, ResonanceScoreHistory):
+    if not isinstance(value, ResonanceScoreHistory):
         raise ActiveBoxReplayError(
-            "replay_score_history must be a ResonanceScoreHistory"
+            f"{field_name} must be a ResonanceScoreHistory"
         )
+    try:
+        restored = ResonanceScoreHistory.from_dict(value.to_dict())
+    except (
+        AttributeError,
+        KeyError,
+        AssertionError,
+        TypeError,
+        ValueError,
+        RuntimeError,
+    ) as exc:
+        raise ActiveBoxReplayError(
+            f"{field_name} is not a formally valid ResonanceScoreHistory"
+        ) from exc
+    if restored != value:
+        raise ActiveBoxReplayError(
+            f"{field_name} payload is not formally self-consistent"
+        )
+    return value
+
+
+def _validate_replay_schedule(
+    source: ResonanceScoreHistory,
+    replay: ResonanceScoreHistory,
+) -> ResonanceScoreHistory:
     if replay.config_snapshot != source.config_snapshot:
         raise ActiveBoxReplayError(
             "Replay scoring config must exactly equal source scoring config"
@@ -72,38 +100,56 @@ def replay_active_box_history(
 ) -> ActiveBoxSelectionHistory:
     if not isinstance(selector, ActiveBoxSelector):
         raise ActiveBoxReplayError("selector must be an ActiveBoxSelector")
-    if not isinstance(source_score_history, ResonanceScoreHistory):
+    try:
+        config = _selector_config(selector)
+    except ActiveBoxEngineError as exc:
         raise ActiveBoxReplayError(
-            "source_score_history must be a ResonanceScoreHistory"
+            "selector config is not formally valid"
+        ) from exc
+    source = _validate_formal_replay_history(
+        source_score_history, "source_score_history"
+    )
+    explicit = (
+        None
+        if replay_score_history is None
+        else _validate_formal_replay_history(
+            replay_score_history, "replay_score_history"
         )
+    )
     if any(
         frame.source_frame.config_snapshot.symbol
-        != selector.config.symbol
-        for frame in source_score_history.frames
+        != config.symbol
+        for frame in source.frames
     ):
         raise ActiveBoxReplayError(
             "selector symbol conflicts with source ScoreHistory"
         )
     schedule = (
-        source_score_history
-        if replay_score_history is None
-        else _validate_replay_history(
-            source_score_history, replay_score_history
-        )
+        source
+        if explicit is None
+        else _validate_replay_schedule(source, explicit)
     )
     if any(
         frame.source_frame.config_snapshot.symbol
-        != selector.config.symbol
+        != config.symbol
         for frame in schedule.frames
     ):
         raise ActiveBoxReplayError(
             "selector symbol conflicts with Replay ScoreHistory"
         )
-    result = selector.build_batch(schedule)
+    try:
+        result = selector.build_batch(schedule)
+        baseline = (
+            None if explicit is not None else selector.build_batch(source)
+        )
+    except ActiveBoxContractError as exc:
+        raise ActiveBoxReplayError(
+            "Replay schedule failed Active Box validation"
+        ) from exc
     if (
-        replay_score_history is None
+        explicit is None
         and result.to_dict()
-        != selector.build_batch(source_score_history).to_dict()
+        != baseline.to_dict()
     ):
         raise ActiveBoxReplayError(
             "default Replay must be byte-equivalent to Batch"
