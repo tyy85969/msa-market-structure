@@ -56,6 +56,7 @@
 - Added explicit contribution factors, family dependency adjustment, diversity bonuses, quality/selection scores, explanations, per-side ranking, and stable Zone identities.
 - Added score-frame Batch/Replay, strict serialization, and full-payload no-lookahead coverage without Active Box selection.
 - Added the C-007C causal Active Box contract layer for Zone eligibility, nearest-qualified hysteresis, formal StructureCluster projection, stable episode/snapshot identity, CREATED/FROZEN events, SelectionFrames, and immutable history validation without a selector state machine.
+- Added the stateless C-007C Active Box selector engine with causal create, observe, freeze, replace, Batch, Replay, deterministic-history, and no-lookahead coverage.
 
 ### Added
 - 初始化 MSA 项目仓库。
