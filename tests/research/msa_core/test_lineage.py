@@ -2,9 +2,25 @@ from dataclasses import replace
 
 import pytest
 
-from msa.research.msa_core import MSACoreIntegrationError
+from msa.research.msa_core import (
+    MSACoreIntegrationError,
+    build_msa_core_run,
+)
 
-from .fixtures import batch_run
+from .fixtures import (
+    batch_run,
+    resigned_source_fields,
+    source_lineage_attack,
+)
+
+
+SOURCE_LINEAGE_ATTACKS = (
+    "reference_bar_payload",
+    "lifecycle_history",
+    "timeframe_state_history",
+    "default_causal_schedule",
+    "future_input_facts",
+)
 
 
 def test_bundle_provenance_has_exact_stage_parents() -> None:
@@ -36,6 +52,32 @@ def test_run_rejects_forged_provenance_parent() -> None:
     )
     with pytest.raises(MSACoreIntegrationError):
         replace(run, provenance=forged)
+
+
+@pytest.mark.parametrize("case", SOURCE_LINEAGE_ATTACKS)
+def test_resigned_source_input_cannot_reuse_another_run_history(case) -> None:
+    run, source_b = source_lineage_attack(case)
+    canonical, run_id, provenance = resigned_source_fields(run, source_b)
+    with pytest.raises(MSACoreIntegrationError):
+        replace(
+            run,
+            source_input=canonical,
+            run_id=run_id,
+            provenance=provenance,
+        )
+
+
+@pytest.mark.parametrize("case", SOURCE_LINEAGE_ATTACKS)
+def test_builder_cannot_bind_another_source_to_formal_histories(case) -> None:
+    run, source_b = source_lineage_attack(case)
+    with pytest.raises(MSACoreIntegrationError):
+        build_msa_core_run(
+            run.config_snapshot,
+            source_b,
+            run.resonance_history,
+            run.score_history,
+            run.active_box_history,
+        )
 
 
 def test_every_frame_is_causal_at_bundle_asof() -> None:

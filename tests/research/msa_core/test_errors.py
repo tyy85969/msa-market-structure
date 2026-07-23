@@ -80,3 +80,21 @@ def test_processing_time_mismatch_fails_closed() -> None:
     run = batch_run()
     with pytest.raises(MSACoreIntegrationError):
         replace(run, processing_times=run.processing_times[:-1])
+
+
+@pytest.mark.parametrize(
+    "replacement",
+    (
+        lambda *args, **kwargs: object(),
+        lambda *args, **kwargs: (_ for _ in ()).throw(KeyError("upstream")),
+    ),
+)
+def test_source_replay_upstream_failures_use_core_error(
+    monkeypatch, replacement
+) -> None:
+    run = batch_run()
+    monkeypatch.setattr(
+        "msa.research.resonance.replay_history", replacement
+    )
+    with pytest.raises(MSACoreIntegrationError):
+        replace(run)

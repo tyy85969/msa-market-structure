@@ -8,7 +8,13 @@ from msa.research.msa_core import (
     MSACoreSerializationError,
 )
 
-from .fixtures import batch_run, config
+from .fixtures import (
+    batch_run,
+    config,
+    resigned_source_fields,
+    source_lineage_attack,
+)
+from .test_lineage import SOURCE_LINEAGE_ATTACKS
 
 
 @pytest.mark.parametrize("contract_factory", [config, batch_run])
@@ -61,3 +67,28 @@ def test_config_nested_unknown_field_is_rejected() -> None:
     payload["frame_config"]["unknown"] = True
     with pytest.raises(MSACoreSerializationError):
         MSACoreConfig.from_dict(payload)
+
+
+@pytest.mark.parametrize("case", SOURCE_LINEAGE_ATTACKS)
+def test_resigned_serialized_source_cannot_reuse_another_run_history(
+    case,
+) -> None:
+    run, source_b = source_lineage_attack(case)
+    canonical, run_id, provenance = resigned_source_fields(run, source_b)
+    payload = run.to_dict()
+    payload["source_input"] = canonical.to_dict()
+    payload["run_id"] = run_id
+    payload["provenance"] = provenance.to_dict()
+    with pytest.raises(MSACoreSerializationError):
+        MSACoreRun.from_dict(payload)
+
+
+def test_source_replay_failure_is_wrapped_by_from_dict(monkeypatch) -> None:
+    payload = batch_run().to_dict()
+
+    def reject(*args, **kwargs):
+        raise AssertionError("upstream replay failure")
+
+    monkeypatch.setattr("msa.research.resonance.replay_history", reject)
+    with pytest.raises(MSACoreSerializationError):
+        MSACoreRun.from_dict(payload)

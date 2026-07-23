@@ -66,3 +66,17 @@ def test_stage_replay_mismatch_is_rejected(monkeypatch) -> None:
     )
     with pytest.raises(MSACoreReplayError):
         replay_msa_core_run(value, source, extra_schedule())
+
+
+def test_active_box_stage_replay_history_mismatch_is_rejected(
+    monkeypatch,
+) -> None:
+    value = pipeline()
+    source = source_input()
+    formally_valid_but_different = value.run(source).active_box_history
+    monkeypatch.setattr(
+        "msa.research.msa_core.replay.replay_active_box_history",
+        lambda *args, **kwargs: formally_valid_but_different,
+    )
+    with pytest.raises(MSACoreReplayError):
+        replay_msa_core_run(value, source, extra_schedule())

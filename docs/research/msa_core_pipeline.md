@@ -37,7 +37,11 @@ The only raw integration input is a formally round-trippable
 `ResonanceFrameInput`. Its reference symbol and timeframe must match the
 integration Frame config. Timeframe histories must exactly cover configured
 contexts; their legal input order is normalized to the canonical config
-context order.
+context order. A Run additionally replays that canonical input through the
+official C-007A `replay_history()` API with its stored Frame config and exact
+processing schedule, then requires complete `ResonanceFrameHistory` payload
+equality. Re-signing a Run around different lifecycle, timeframe, reference
+bar, future-fact, or default-schedule input therefore fails closed.
 
 ## 7. MSACoreConfig
 
