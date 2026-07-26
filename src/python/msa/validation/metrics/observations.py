@@ -262,34 +262,39 @@ def _false_turn(
         ) from exc
     future_bars = bars_after(bars, event.event_confirm_time, cutoff)
     window = future_bars[: config.turn_resolution_bars]
+    if len(future_bars) < config.turn_resolution_bars:
+        return _observation(
+            formula=formula,
+            event=event,
+            status=MetricObservationStatus.CENSORED_RIGHT,
+            start=event.event_confirm_time,
+            end=(window[-1].available_time if window else cutoff),
+            bars=window,
+            value=None,
+            numerator=None,
+            denominator=None,
+            facts={"reason": "turn_resolution_window_incomplete"},
+        )
+    window_end = window[-1].available_time
     stable = {Direction.UP, Direction.DOWN}
     resolved_state = None
     for snapshot in history.snapshots:
         state = snapshot.state
         if (
             state.confirm_time <= event.event_confirm_time
-            or state.confirm_time > cutoff
+            or state.confirm_time > window_end
             or state.direction not in stable
         ):
             continue
-        bars_to_resolution = tuple(
-            item
-            for item in future_bars
-            if item.available_time <= state.confirm_time
-        )
-        if len(bars_to_resolution) <= config.turn_resolution_bars:
-            resolved_state = state
-            window = bars_to_resolution
-            break
+        resolved_state = state
+        break
     if resolved_state is None:
         return _observation(
             formula=formula,
             event=event,
             status=MetricObservationStatus.CENSORED_RIGHT,
             start=event.event_confirm_time,
-            end=(
-                window[-1].available_time if window else cutoff
-            ),
+            end=window_end,
             bars=window,
             value=None,
             numerator=None,
@@ -789,18 +794,38 @@ def iter_structural_metric_observations(
                 "MSACoreRun failed the independent CausalAuditor"
             )
         context.prec = DECIMAL_PRECISION
-        selected_events = (
-            _extract_events(run, resolved, cutoff)
-            if events is None
-            else events
-        )
-        if not isinstance(selected_events, tuple) or any(
-            not isinstance(item, StructuralMetricEvent)
-            for item in selected_events
+        expected_events = _extract_events(run, resolved, cutoff)
+        if events is None:
+            selected_events = expected_events
+        elif not isinstance(events, tuple) or any(
+            not isinstance(item, StructuralMetricEvent) for item in events
         ):
             raise MetricInputError(
                 "events must be a StructuralMetricEvent tuple"
             )
+        else:
+            try:
+                supplied_payload = tuple(
+                    item.to_dict() for item in events
+                )
+                expected_payload = tuple(
+                    item.to_dict() for item in expected_events
+                )
+            except (
+                AttributeError,
+                KeyError,
+                TypeError,
+                AssertionError,
+                ValueError,
+            ) as exc:
+                raise MetricInputError(
+                    "events could not be inspected safely"
+                ) from exc
+            if supplied_payload != expected_payload:
+                raise MetricInputError(
+                    "events must exactly equal formal extraction for this Run"
+                )
+            selected_events = events
         yield from _observations(
             run, selected_events, resolved, cutoff
         )

@@ -27,3 +27,7 @@ class MetricMatchingError(StructuralMetricError):
 
 class MetricSerializationError(StructuralMetricError):
     """Raised when strict metric deserialization fails."""
+
+
+class MetricReportError(StructuralMetricError):
+    """Raised when a report is not bound to the supplied source Run."""

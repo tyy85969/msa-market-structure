@@ -1,6 +1,6 @@
 from decimal import Decimal, getcontext
 
-from msa.validation.metrics import causal_wilder_atr, true_ranges
+from msa.validation.metrics.bars import causal_wilder_atr, true_ranges
 from tests.research.timeframe_state.fixtures import bar
 
 

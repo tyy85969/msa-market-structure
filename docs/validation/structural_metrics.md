@@ -102,9 +102,9 @@ It ends at the next direction change or remains open at the evaluation cutoff.
 
 ## 17. Trend Capture Ratio
 
-For a matured fixed horizon, directional close displacement is divided by the
-maximum favorable high/low excursion over the same completed-bar window.
-Zero or absent denominator is unavailable, not repaired.
+For a matured fixed horizon the frozen formula is
+`clamp(remaining_opportunity, 0, full_opportunity) / full_opportunity`.
+Zero or absent `full_opportunity` is unavailable, not repaired.
 
 ## 18. Active Box episodes
 
@@ -130,19 +130,21 @@ lineage, anchor, completed touch bar, selection facts, and event-time ATR.
 
 After a support touch, favorable excursion is the later highest high minus
 anchor; after resistance, anchor minus the later lowest low. The touch bar is
-excluded. Values are normalized by touch-time ATR. MFE is not trading profit.
+excluded. MFE is retained in `PRICE` units and is not divided by ATR. MFE is
+not trading profit.
 
 ## 22. MAE
 
 After support, adverse excursion is anchor minus the later lowest low; after
 resistance, the later highest high minus anchor. The touch bar is excluded and
-the result is ATR-normalized. MAE is not trading loss.
+the result remains in `PRICE` units without ATR division. MAE is not trading
+loss.
 
 ## 23. First Touch Reaction
 
-Reaction is signed close displacement from the anchor over the fixed
-post-touch window, oriented by support/resistance and normalized by touch-time
-ATR. It describes structural response, not return or win rate.
+The frozen formula is `(MFE - MAE) / causal_atr_at_touch`, using the two
+price-unit excursions and the causal ATR available at touch confirmation. It
+describes structural response, not return or win rate.
 
 ## 24. Resonance matching
 
@@ -184,6 +186,16 @@ fields, and revalidate direct construction. Invalid config, unauditable Runs,
 broken lineage, forged IDs/results, ambiguous bars, cross-side/reused matches,
 and inconsistent report counts fail with metric-domain exceptions. Inputs are
 never auto-repaired.
+
+`MetricEvaluationReport.from_dict()` proves schema validity, deterministic
+identity, and internal consistency only. It cannot prove that an internally
+re-signed payload came from a particular Run.
+`validate_metric_evaluation_report(run, report)` first causally audits the
+formal `MSACoreRun`, then recomputes the complete report from
+`report.config_snapshot` and `report.evaluation_as_of_time`, and requires exact
+`to_dict()` equality. Report provenance includes the SHA-256 digest of the
+complete source Run `to_dict()` payload; only this source-bound verifier proves
+that the report belongs to the supplied Run.
 
 ## 30. Synthetic limitations
 

@@ -53,6 +53,7 @@ from .metrics import (
     MetricMatchingError,
     MetricObservationError,
     MetricObservationStatus,
+    MetricReportError,
     MetricSerializationError,
     ResonanceMatchStatus,
     ResonanceOutcomeMatch,
@@ -67,6 +68,7 @@ from .metrics import (
     evaluate_structural_metrics,
     extract_structural_metric_events,
     iter_structural_metric_observations,
+    validate_metric_evaluation_report,
 )
 
 __all__ = [
@@ -97,6 +99,7 @@ __all__ = [
     "MetricMatchingError",
     "MetricObservationError",
     "MetricObservationStatus",
+    "MetricReportError",
     "MetricSerializationError",
     "ResonanceMatchStatus",
     "ResonanceOutcomeMatch",
@@ -127,5 +130,6 @@ __all__ = [
     "evaluate_structural_metrics",
     "extract_structural_metric_events",
     "iter_structural_metric_observations",
+    "validate_metric_evaluation_report",
     "required_audit_codes",
 ]

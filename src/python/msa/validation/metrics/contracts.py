@@ -1886,9 +1886,28 @@ class MetricEvaluationReport:
             non_empty=True,
             unique=True,
         )
+        digest_prefix = "source_run_payload_digest="
+        if len(provenance) != 5 or not provenance[2].startswith(
+            digest_prefix
+        ):
+            raise MetricObservationError(
+                "provenance must include the complete source Run payload digest"
+            )
+        source_run_payload_digest = provenance[2][len(digest_prefix) :]
+        if (
+            len(source_run_payload_digest) != 64
+            or any(
+                character not in "0123456789abcdef"
+                for character in source_run_payload_digest
+            )
+        ):
+            raise MetricObservationError(
+                "source_run_payload_digest must be a lowercase SHA-256 digest"
+            )
         expected_provenance = (
             METRIC_REPORT_PROVENANCE_ENTRY,
             f"source_run_id={self.source_run_id}",
+            f"source_run_payload_digest={source_run_payload_digest}",
             f"evaluation_as_of_time={cutoff.isoformat()}",
             f"engine_id={config.engine_id}",
         )
@@ -1898,7 +1917,7 @@ class MetricEvaluationReport:
             )
         if provenance != expected_provenance:
             raise MetricObservationError(
-                "provenance must bind source, cutoff, and engine"
+                "provenance must bind source ID, payload, cutoff, and engine"
             )
         require_semantic_id(
             self.metric_report_id,

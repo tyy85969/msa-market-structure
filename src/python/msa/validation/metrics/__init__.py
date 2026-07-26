@@ -1,13 +1,5 @@
 """Public C-008B causal structural metric API."""
 
-from .bars import (
-    canonical_bar_id,
-    causal_atr_at_or_before,
-    causal_wilder_atr,
-    true_ranges,
-    validate_reference_bars,
-    visible_reference_bars,
-)
 from .contracts import (
     FORMULA_STATUS_FROZEN,
     METRIC_REPORT_ASSUMPTIONS,
@@ -29,6 +21,7 @@ from .contracts import (
 from .engine import (
     StructuralMetricEvaluator,
     evaluate_structural_metrics,
+    validate_metric_evaluation_report,
 )
 from .errors import (
     MetricConfigurationError,
@@ -36,12 +29,12 @@ from .errors import (
     MetricInputError,
     MetricMatchingError,
     MetricObservationError,
+    MetricReportError,
     MetricSerializationError,
     StructuralMetricError,
 )
 from .events import extract_structural_metric_events
 from .formula_registry import default_metric_formula_registry
-from .matching import match_resonance_outcomes
 from .observations import iter_structural_metric_observations
 
 __all__ = [
@@ -58,6 +51,7 @@ __all__ = [
     "MetricInputError",
     "MetricMatchingError",
     "MetricObservationError",
+    "MetricReportError",
     "MetricObservationStatus",
     "MetricSerializationError",
     "ResonanceMatchStatus",
@@ -69,15 +63,9 @@ __all__ = [
     "StructuralMetricEvent",
     "StructuralMetricObservation",
     "TurnResolution",
-    "canonical_bar_id",
-    "causal_atr_at_or_before",
-    "causal_wilder_atr",
     "default_metric_formula_registry",
     "evaluate_structural_metrics",
     "extract_structural_metric_events",
     "iter_structural_metric_observations",
-    "match_resonance_outcomes",
-    "true_ranges",
-    "validate_reference_bars",
-    "visible_reference_bars",
+    "validate_metric_evaluation_report",
 ]

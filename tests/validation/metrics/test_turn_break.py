@@ -1,7 +1,8 @@
+from copy import deepcopy
 from datetime import timedelta
 from decimal import Decimal
 
-from msa.domain import BoundarySide, MarketRole
+from msa.domain import BoundarySide, Direction, MarketRole
 from msa.validation import (
     BreakResolution,
     MetricEventKind,
@@ -10,10 +11,15 @@ from msa.validation import (
     ValidationMetricName,
 )
 from msa.validation.metrics.events import _event
-from msa.validation.metrics.observations import _continued_break
+from msa.validation.metrics.observations import _continued_break, _false_turn
 from tests.research.timeframe_state.fixtures import START, bar
 
-from .fixtures import direction_report, formula, metric_config
+from .fixtures import (
+    direction_report,
+    direction_run,
+    formula,
+    metric_config,
+)
 
 
 def test_turn_opposite_is_resolved_zero() -> None:
@@ -26,6 +32,108 @@ def test_turn_opposite_is_resolved_zero() -> None:
     assert observation.status is MetricObservationStatus.MATURED
     assert observation.value == Decimal("0")
     assert facts["resolution"] == TurnResolution.OPPOSITE_CONFIRMED.value
+
+
+def _turn_boundary_observation(
+    *,
+    stable_confirm_time,
+    cutoff=None,
+    stable_direction: Direction = Direction.DOWN,
+    include_n_plus_one_bar: bool = False,
+):
+    run = deepcopy(direction_run())
+    report = direction_report()
+    event = next(
+        item
+        for item in report.events
+        if item.kind is MetricEventKind.TURN_CANDIDATE
+    )
+    history = run.source_input.timeframe_state_histories[0]
+    state = history.snapshots[-1].state
+    object.__setattr__(state, "confirm_time", stable_confirm_time)
+    object.__setattr__(state, "direction", stable_direction)
+    bars = run.source_input.reference_price_data.bars
+    if include_n_plus_one_bar:
+        bars = (*bars, bar(4, high="102", low="79", close="91"))
+    return _false_turn(
+        formula(ValidationMetricName.FALSE_TURN_RATE),
+        event,
+        run,
+        metric_config(turn_resolution_bars=1),
+        bars,
+        cutoff or bars[-1].available_time,
+    )
+
+
+def test_turn_stable_confirm_time_equal_window_end_is_matured() -> None:
+    run = direction_run()
+    window_end = run.source_input.reference_price_data.bars[-1].available_time
+    observation = _turn_boundary_observation(
+        stable_confirm_time=window_end
+    )
+    assert observation.status is MetricObservationStatus.MATURED
+    assert observation.observation_end_time == window_end
+
+
+def test_turn_stable_confirm_time_n_plus_one_microsecond_is_not_resolved() -> None:
+    run = direction_run()
+    window_end = run.source_input.reference_price_data.bars[-1].available_time
+    observation = _turn_boundary_observation(
+        stable_confirm_time=window_end + timedelta(microseconds=1),
+        cutoff=window_end + timedelta(hours=1),
+        include_n_plus_one_bar=True,
+    )
+    assert observation.status is MetricObservationStatus.CENSORED_RIGHT
+    assert observation.observation_end_time == window_end
+
+
+def test_turn_stable_state_between_n_and_n_plus_one_bar_is_not_resolved() -> None:
+    run = direction_run()
+    window_end = run.source_input.reference_price_data.bars[-1].available_time
+    observation = _turn_boundary_observation(
+        stable_confirm_time=window_end + timedelta(minutes=30),
+        cutoff=window_end + timedelta(hours=1),
+        include_n_plus_one_bar=True,
+    )
+    assert observation.status is MetricObservationStatus.CENSORED_RIGHT
+    assert observation.observation_end_time == window_end
+
+
+def test_turn_unfinished_nth_bar_is_right_censored() -> None:
+    run = direction_run()
+    window_end = run.source_input.reference_price_data.bars[-1].available_time
+    observation = _turn_boundary_observation(
+        stable_confirm_time=window_end,
+        cutoff=window_end - timedelta(microseconds=1),
+    )
+    assert observation.status is MetricObservationStatus.CENSORED_RIGHT
+    assert "reason=turn_resolution_window_incomplete" in observation.facts
+
+
+def test_turn_complete_window_without_stable_direction_is_right_censored() -> None:
+    run = direction_run()
+    window_end = run.source_input.reference_price_data.bars[-1].available_time
+    observation = _turn_boundary_observation(
+        stable_confirm_time=window_end,
+        stable_direction=Direction.RANGE,
+    )
+    assert observation.status is MetricObservationStatus.CENSORED_RIGHT
+    assert observation.observation_end_time == window_end
+
+
+def test_turn_stable_direction_after_window_does_not_rewrite_old_cutoff() -> None:
+    run = direction_run()
+    window_end = run.source_input.reference_price_data.bars[-1].available_time
+    old = _turn_boundary_observation(
+        stable_confirm_time=window_end + timedelta(minutes=30),
+        cutoff=window_end,
+    )
+    appended = _turn_boundary_observation(
+        stable_confirm_time=window_end + timedelta(minutes=30),
+        cutoff=window_end + timedelta(hours=1),
+        include_n_plus_one_bar=True,
+    )
+    assert old.to_dict() == appended.to_dict()
 
 
 def break_event(side: BoundarySide):

@@ -58,13 +58,13 @@ def test_complete_report_digests_and_aggregate_ids_are_frozen() -> None:
     base = base_report()
     touch = touch_report()
     assert digest(base.to_dict()) == (
-        "e12eb84c775bdb73d970e8aac4a6c10606610d5b78a24e084d9b0aaf2ff3ac74"
+        "18620a9201d4653a19cb6b95b0a02702c61e0f8e89bc2af92467b7c50169a245"
     )
     assert digest(touch.to_dict()) == (
-        "53c0041875841e5cc4fb42098171c7444546275dd11629218d7abbb5d7b8ca28"
+        "63c90ead3b17519c46f5b6be62347f8a8a1c367ca8b4854072e7b6f6f4837382"
     )
     assert base.metric_report_id == (
-        "metric-evaluation-report-v1-12ce3844e3a17f6afa94af4692d3c27eddb7f4143244394d121a8321d5ef11c5"
+        "metric-evaluation-report-v1-71fde14a57aece646dd345c88234dde0e46ba60454030342e407de01b8d92519"
     )
     assert len(tuple(item.metric_aggregate_id for item in base.aggregates)) == 10
     assert tuple(item.metric_aggregate_id for item in base.aggregates) == (

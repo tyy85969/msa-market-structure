@@ -21,7 +21,7 @@ from .contracts import (
 from .errors import MetricInputError
 from .events import _extract_events, resolve_evaluation_as_of
 from .formula_registry import default_metric_formula_registry
-from .identity import DECIMAL_PRECISION, semantic_id
+from .identity import DECIMAL_PRECISION, digest, semantic_id
 from .matching import match_resonance_outcomes
 from .observations import _observations, build_metric_aggregates
 
@@ -58,6 +58,18 @@ class StructuralMetricEvaluator:
             raise MetricInputError(
                 "MSACoreRun failed the independent CausalAuditor"
             )
+        try:
+            source_run_payload_digest = digest(run.to_dict())
+        except (
+            AttributeError,
+            KeyError,
+            TypeError,
+            AssertionError,
+            ValueError,
+        ) as exc:
+            raise MetricInputError(
+                "MSACoreRun payload could not be digested safely"
+            ) from exc
         formulas = default_metric_formula_registry()
         with localcontext() as context:
             context.prec = DECIMAL_PRECISION
@@ -85,6 +97,7 @@ class StructuralMetricEvaluator:
         provenance = (
             METRIC_REPORT_PROVENANCE_ENTRY,
             f"source_run_id={run.run_id}",
+            f"source_run_payload_digest={source_run_payload_digest}",
             f"evaluation_as_of_time={cutoff.isoformat()}",
             f"engine_id={self.config.engine_id}",
         )
@@ -154,3 +167,44 @@ def evaluate_structural_metrics(
     return StructuralMetricEvaluator(
         resolve_metric_config(config)
     ).evaluate(run, evaluation_as_of_time)
+
+
+def validate_metric_evaluation_report(
+    run: MSACoreRun,
+    report: MetricEvaluationReport,
+) -> MetricEvaluationReport:
+    """Prove that a formal report exactly recomputes from a formal source Run."""
+
+    from .errors import MetricReportError, StructuralMetricError
+
+    if not isinstance(run, MSACoreRun):
+        raise MetricInputError("run must be an MSACoreRun")
+    if not isinstance(report, MetricEvaluationReport):
+        raise MetricReportError(
+            "report must be a MetricEvaluationReport"
+        )
+    try:
+        report_payload = report.to_dict()
+        canonical_report = MetricEvaluationReport.from_dict(report_payload)
+    except StructuralMetricError as exc:
+        raise MetricReportError(
+            "report failed formal structural validation"
+        ) from exc
+    except (
+        AttributeError,
+        KeyError,
+        TypeError,
+        AssertionError,
+        ValueError,
+    ) as exc:
+        raise MetricReportError(
+            "report could not be inspected safely"
+        ) from exc
+    expected = StructuralMetricEvaluator(
+        canonical_report.config_snapshot
+    ).evaluate(run, canonical_report.evaluation_as_of_time)
+    if expected.to_dict() != report_payload:
+        raise MetricReportError(
+            "report does not exactly recompute from the supplied source Run"
+        )
+    return report

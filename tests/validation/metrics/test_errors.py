@@ -4,6 +4,7 @@ from decimal import Decimal
 
 import pytest
 
+import msa.validation.metrics as public_metrics
 from msa.validation import (
     MetricConfigurationError,
     MetricEvaluationReport,
@@ -102,3 +103,16 @@ def test_direct_replacement_cannot_forge_observation_value() -> None:
     matured = next(item for item in report.observations if item.value)
     with pytest.raises(StructuralMetricError):
         replace(matured, value=matured.value + Decimal("1"))
+
+
+def test_internal_low_level_helpers_are_not_publicly_exported() -> None:
+    internal_names = {
+        "match_resonance_outcomes",
+        "validate_reference_bars",
+        "true_ranges",
+        "causal_wilder_atr",
+        "causal_atr_at_or_before",
+        "visible_reference_bars",
+        "canonical_bar_id",
+    }
+    assert internal_names.isdisjoint(public_metrics.__all__)
