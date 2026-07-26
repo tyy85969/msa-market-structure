@@ -47,6 +47,14 @@ C-007 合同和完整序列化 Payload，并通过公开 replay/Batch API 交叉
 修复被审计对象，不计算 C-008B 指标公式，也不产生任何交易行为。框架说明
 见 `docs/validation/causal_audit_framework.md`。
 
+## Causal structural metrics
+
+C-008B 的研究型评价入口同样位于 `msa.validation`。
+`StructuralMetricEvaluator` 先要求完整 `MSACoreRun` 通过 C-008A
+`CausalAuditor`，再以明确的 Evaluation AsOf、因果 ATR、右侧截尾和确定性
+事件匹配计算十个冻结结构指标。该层不修改 C-007，不计算收益或胜率，也不
+产生交易行为。公式与边界见 `docs/validation/structural_metrics.md`。
+
 ## 近期里程碑
 
 1. **Phase 0 — Repository Bootstrap**：固化项目规则、架构、决策、假设与验证规范
