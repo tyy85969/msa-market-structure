@@ -62,6 +62,16 @@ MFE/MAE 保持 `PRICE` 单位；First Touch Reaction 使用
 digest 和全量重算证明报告确实来自指定 Run。公式与边界见
 `docs/validation/structural_metrics.md`。
 
+## Core Alpha v1 reference profile
+
+The explicit `msa.reference.core_alpha_v1_config()` factory returns the formal
+Core Alpha v1 configuration profile authorized from the complete C-007D
+fixture payload at commit
+`d72c18f7994afd506e6ecf044571ccffbc695631`. It does not add implicit defaults
+to the generic Core contracts, modify any algorithm, optimize parameters, or
+make a profitability claim. The authority and change-control boundary is
+documented in `docs/reference/core_alpha_v1_baseline.md`.
+
 ## 近期里程碑
 
 1. **Phase 0 — Repository Bootstrap**：固化项目规则、架构、决策、假设与验证规范
