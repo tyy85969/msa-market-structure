@@ -61,6 +61,8 @@
 - Added unified Replay with stage cross-audits, strict lineage/provenance validation, 100+ AsOf smoke coverage, and end-to-end full-payload no-lookahead acceptance.
 - Added the independent C-008A causal audit contracts, complete-payload Run comparisons, deterministic mutation harness, synthetic scenario baselines, and reserved metric registry without changing C-007 behavior.
 - Hardened C-008A report authority, subject-bound provenance, strict configuration resolution, corruption-safe inspection, Prefix/Shared comparison guards, and Active Box event-result AsOf auditing.
+- Added the C-008B immutable structural metric contracts, frozen ten-formula registry, causal event extraction and ATR, explicit right-censored observations, deterministic resonance matching, aggregate/report validation, and no-lookahead coverage without changing C-007 or C-008A semantics.
+- Bound C-008B reports to the complete source Run payload, closed caller-supplied Event injection, fixed the exact Turn resolution window, corrected metric formula documentation, and replaced isolated scale outcomes with a formal 100+ frame end-to-end evaluator scenario.
 
 ### Added
 - 初始化 MSA 项目仓库。
