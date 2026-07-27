@@ -120,3 +120,79 @@ def test_mutated_formal_objects_cannot_bypass_authority() -> None:
     object.__setattr__(config, "engine_id", "forged-core")
     with pytest.raises(MSAReferenceError):
         validate_core_alpha_v1_config(config)
+
+
+@pytest.mark.parametrize(
+    ("field_name", "corrupted_value"),
+    (
+        ("core_config", object()),
+        ("core_config", None),
+        ("source_authority", object()),
+        ("source_authority", None),
+        ("assumptions", object()),
+        ("assumptions", None),
+        ("profile_semantic_id", []),
+    ),
+)
+def test_post_construction_corrupted_profile_fields_fail_closed(
+    field_name: str, corrupted_value: object
+) -> None:
+    profile = core_alpha_v1_profile()
+    object.__setattr__(profile, field_name, corrupted_value)
+
+    with pytest.raises(MSAReferenceError) as caught:
+        validate_core_alpha_v1_profile(profile)
+
+    assert not isinstance(
+        caught.value, (AttributeError, KeyError, TypeError, AssertionError)
+    )
+
+
+@pytest.mark.parametrize(
+    "child_field",
+    ("frame_config", "scoring_config", "active_box_config"),
+)
+def test_post_construction_corrupted_profile_child_configs_fail_closed(
+    child_field: str,
+) -> None:
+    profile = core_alpha_v1_profile()
+    object.__setattr__(profile.core_config, child_field, object())
+
+    with pytest.raises(MSAReferenceError) as caught:
+        validate_core_alpha_v1_profile(profile)
+
+    assert not isinstance(
+        caught.value, (AttributeError, KeyError, TypeError, AssertionError)
+    )
+
+
+@pytest.mark.parametrize(
+    ("target", "field_name", "corrupted_value"),
+    (
+        ("config", "engine_id", object()),
+        ("config", "frame_config", object()),
+        ("config", "scoring_config", object()),
+        ("config", "active_box_config", object()),
+        ("frame", "contexts", (object(),)),
+        ("scoring", "context_weights", (object(),)),
+        ("active", "allowed_resonance_classes", (object(),)),
+    ),
+)
+def test_post_construction_corrupted_configs_fail_closed(
+    target: str, field_name: str, corrupted_value: object
+) -> None:
+    config = core_alpha_v1_config()
+    subjects = {
+        "config": config,
+        "frame": config.frame_config,
+        "scoring": config.scoring_config,
+        "active": config.active_box_config,
+    }
+    object.__setattr__(subjects[target], field_name, corrupted_value)
+
+    with pytest.raises(MSAReferenceError) as caught:
+        validate_core_alpha_v1_config(config)
+
+    assert not isinstance(
+        caught.value, (AttributeError, KeyError, TypeError, AssertionError)
+    )

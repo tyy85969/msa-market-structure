@@ -255,7 +255,7 @@ def validate_core_alpha_v1_config(value: object) -> MSACoreConfig:
     try:
         payload = value.to_dict()
         restored = MSACoreConfig.from_dict(payload)
-    except (MSACoreError, AttributeError, KeyError, TypeError) as exc:
+    except (AttributeError, KeyError, TypeError, ValueError) as exc:
         raise ReferenceConfigurationError(
             "value is not a formal MSACoreConfig"
         ) from exc
@@ -426,14 +426,15 @@ def validate_core_alpha_v1_profile(value: object) -> CoreBaselineProfile:
     if not isinstance(value, CoreBaselineProfile):
         raise ReferenceInputError("value must be a CoreBaselineProfile")
     try:
-        restored = CoreBaselineProfile.from_dict(value.to_dict())
-    except ReferenceSerializationError as exc:
+        payload = value.to_dict()
+        restored = CoreBaselineProfile.from_dict(payload)
+    except (AttributeError, KeyError, TypeError, ValueError) as exc:
         raise ReferenceConfigurationError(
             "value is not a formal CoreBaselineProfile"
         ) from exc
     expected_config = MSACoreConfig.from_dict(_authorized_core_config_payload())
     expected = _build_core_alpha_v1_profile(expected_config)
-    if restored != value or value.to_dict() != expected.to_dict():
+    if restored != value or payload != expected.to_dict():
         raise ReferenceAuthorityError(
             "profile does not equal the authorized Core Alpha v1 profile"
         )
