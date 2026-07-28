@@ -1,0 +1,2 @@
+docs/reference/*.json text eol=lf
+docs/validation/evidence/*.json text eol=lf
