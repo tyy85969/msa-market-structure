@@ -38,6 +38,10 @@ override, copies no test fixture, and introduces no implicit Core default.
 complete Core config and digest, complete metric config and digest, ordered
 metric-definition and formula identities, assumptions, and provenance.
 Outcome values never participate in baseline identity.
+`validate_core_experiment_baseline()` additionally reconstructs the unique
+factory authority and compares the complete payload. A fully re-signed change
+to assumptions, provenance, order, or identity is therefore rejected even
+when the structural contract remains internally self-consistent.
 
 ## 7. Metric authority
 
@@ -110,6 +114,9 @@ identity.
 Seeds 0 and 1 are DEVELOPMENT, seed 2 is VALIDATION, and seed 3 is OOS. The
 twenty source-input payload digests and case IDs are unique, so no input is
 reused across partitions.
+`validate_c008c_synthetic_dataset()` binds every case field, complete source
+input, causal expectations, assumptions, ordering rule, and identity to the
+production Builder rather than trusting re-signed nested IDs.
 
 ## 18. OOS locking
 
@@ -125,8 +132,11 @@ real-market OOS and does not represent XAUUSD historical performance.
 ## 20. Gate registry
 
 Twenty-seven immutable hard-gate definitions freeze subject, description,
-pass rule, failure rule, and required evidence. C-008C-A records no PASS or
-FAIL result.
+machine-readable `ExperimentGatePolicy`, typed parameters, explicit pass and
+failure conditions, and gate-specific evidence kinds. The policy registry
+does not reuse a generic placeholder rule or a universal evidence list.
+`validate_c008c_gate_registry()` compares every complete definition to the
+factory authority. C-008C-A records no PASS or FAIL result.
 
 ## 21. Protected source boundary
 
@@ -164,7 +174,8 @@ passed the Reference Golden, and remained clean.
 `python -B tools/validation/generate_c008c_authority.py` writes four compact,
 key-sorted, UTF-8, LF-terminated canonical JSON files. `--check` performs
 read-only byte comparison. Evidence contains no clock, host information, or
-absolute path.
+absolute path. Before either writing or checking, the tool source-validates
+the Baseline, Dataset, Gate Registry, Plan, and Protected Source manifest.
 
 ## 25. Failure-closed behavior
 
@@ -172,7 +183,9 @@ Contracts are frozen and slotted, reject unknown fields and schemas, serialize
 tuples as ordered lists and Decimals as strings, and reject float input.
 Authority, dataset, plan, protected-source, and evidence attacks raise the
 finite experiment error hierarchy rather than leaking ordinary Python
-exceptions.
+exceptions. Test-only recursive re-signing recomputes every affected nested
+identity and dependent reference; source-bound validators still reject any
+payload that differs from its formal Factory.
 
 ## 26. Synthetic limitations
 
@@ -191,6 +204,8 @@ object, not a trading signal.
 C-008C-B may execute the predeclared development and validation plan only
 after review. It may not silently change the baseline, axes, variants,
 partitions, gates, protected source, or execution order.
+Before any Run, C-008C-B must call all four public authority validators plus
+the Protected Source validator.
 
 ## 29. C-008C-C boundary
 
@@ -202,3 +217,48 @@ execution is complete. It may not use OOS outcomes to redefine the plan.
 C-009 is not started. Any later Pine migration requires a separately approved
 Core Alpha freeze and semantic-equivalence validation; it may not redesign the
 Core algorithm.
+
+## 31. Complete execution matrix
+
+`ExperimentExecutionScopePolicy` binds all twenty Dataset Case IDs and all
+twenty-six Variant IDs without serializing duplicate pair records. Its
+deterministic Cartesian product contains exactly 520 required pairs. Every
+case maps to every variant, every variant maps to every case, and all five OOS
+cases retain all variants.
+
+## 32. Replay and fixed-cutoff policies
+
+Baseline Batch/Replay parity covers the Baseline on all twenty cases and
+compares complete Core Run and Metric Report payloads. Variant replay covers
+all twenty-five non-Baseline variants on the five predeclared seed-2
+Validation cases, for exactly 125 samples. Fixed-cutoff stability covers the
+Baseline on all twenty cases at every formal causal AsOf and compares complete
+Run, causal-audit, and metric-report payloads. Selection cannot adapt to an
+outcome.
+
+## 33. OOS sample coverage policy
+
+The `OOS_SAMPLE_COVERAGE` gate freezes minimum counts for all ten formal
+metrics: 10/10 confirmation-delay samples, 5 false-turn, 5 continued-break,
+5 trend-capture, 20 MFE, 20 MAE, 20 first-touch, 5 Box episodes, and 3
+Resonance matched pairs. Censored observations do not count as matured,
+unavailable is not zero, and samples cannot be copied to meet a threshold.
+These are synthetic engineering minima, not statistical or profitability
+claims.
+
+## 34. Neighborhood degeneration policy
+
+`NO_NEIGHBORHOOD_DEGENERATION` freezes ten failure classes: pipeline failure,
+causal-audit failure, metric source-binding failure, Batch/Replay mismatch,
+future prefix rewrite, structure-event collapse, Box-episode collapse,
+multi-metric coverage collapse, incomplete aggregates, and invalid or repaired
+Config. Large non-degenerate numerical changes are only `SENSITIVE`; they
+never imply better parameters.
+
+## 35. Plan source authority
+
+`validate_c008c_experiment_plan()` performs a strict round-trip and then
+compares the complete payload with `default_c008c_experiment_plan()`. This
+binds Baseline/Dataset identities, all axes and variants, all ablations and
+increments, every Gate Policy, execution/replay/cutoff scope, registries,
+protocol text, OOS status, assumptions, and Plan identity.

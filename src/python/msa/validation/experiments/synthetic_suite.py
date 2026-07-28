@@ -45,6 +45,8 @@ from msa.research.timeframe_state import (
 )
 from msa.validation.contracts import SyntheticScenarioKind
 
+from .errors import ExperimentInputError
+
 
 UTC = timezone.utc
 START = datetime(2026, 1, 1, tzinfo=UTC)
@@ -267,22 +269,34 @@ def build_synthetic_source_input(
     """Build one formal deterministic source input without global randomness."""
 
     if not isinstance(kind, SyntheticScenarioKind):
-        raise TypeError("kind must be SyntheticScenarioKind")
+        raise ExperimentInputError("kind must be SyntheticScenarioKind")
     if type(seed) is not int or seed not in (0, 1, 2, 3):
-        raise TypeError("seed must be one of 0, 1, 2, 3")
-    source = _source_name(kind, seed)
-    prices = _prices(kind, seed)
-    bars = tuple(
-        _bar(index, close, source=source)
-        for index, close in enumerate(prices)
-    )
-    data = _load_result(bars, source)
-    lifecycle_history = LifecycleEngine(_lifecycle_config()).build_batch(
-        LifecycleInput(data, _subjects(kind, seed, prices))
-    )
-    histories = tuple(
-        _timeframe_history(lifecycle_history, context)
-        for context in (H4_PRIMARY, H12_MACRO)
-    )
-    result = ResonanceFrameInput(lifecycle_history, histories, data)
-    return validate_source_input(result, core_alpha_v1_config())
+        raise ExperimentInputError("seed must be one of 0, 1, 2, 3")
+    try:
+        source = _source_name(kind, seed)
+        prices = _prices(kind, seed)
+        bars = tuple(
+            _bar(index, close, source=source)
+            for index, close in enumerate(prices)
+        )
+        data = _load_result(bars, source)
+        lifecycle_history = LifecycleEngine(_lifecycle_config()).build_batch(
+            LifecycleInput(data, _subjects(kind, seed, prices))
+        )
+        histories = tuple(
+            _timeframe_history(lifecycle_history, context)
+            for context in (H4_PRIMARY, H12_MACRO)
+        )
+        result = ResonanceFrameInput(lifecycle_history, histories, data)
+        return validate_source_input(result, core_alpha_v1_config())
+    except (
+        AssertionError,
+        AttributeError,
+        KeyError,
+        OSError,
+        TypeError,
+        ValueError,
+    ) as exc:
+        raise ExperimentInputError(
+            "unable to build the formal synthetic source input"
+        ) from exc

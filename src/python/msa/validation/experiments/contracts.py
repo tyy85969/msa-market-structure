@@ -31,6 +31,12 @@ from .errors import (
     ExperimentSerializationError,
 )
 from .identity import digest, require_semantic_id
+from .policy_contracts import (
+    ExperimentExecutionScopePolicy,
+    ExperimentFixedCutoffPolicy,
+    ExperimentGatePolicy,
+    ExperimentReplayPolicy,
+)
 
 
 SCHEMA_VERSION = 1
@@ -1048,6 +1054,7 @@ class ExperimentGateDefinition:
     severity: GateSeverity
     subject_kind: str
     description: str
+    policy: ExperimentGatePolicy
     pass_rule: str
     failure_rule: str
     required_evidence_kinds: tuple[str, ...]
@@ -1073,6 +1080,19 @@ class ExperimentGateDefinition:
             _text(getattr(self, field), field, ExperimentGateError)
         if not isinstance(self.severity, GateSeverity):
             raise ExperimentGateError("invalid gate severity")
+        _roundtrip(
+            self.policy,
+            ExperimentGatePolicy,
+            "policy",
+            ExperimentGateError,
+        )
+        if (
+            self.pass_rule != self.policy.pass_condition
+            or self.failure_rule != self.policy.failure_condition
+        ):
+            raise ExperimentGateError(
+                "gate rules must equal the machine-readable policy"
+            )
         _texts(
             self.required_evidence_kinds,
             "required_evidence_kinds",
@@ -1094,6 +1114,7 @@ class ExperimentGateDefinition:
             "severity": self.severity.value,
             "subject_kind": self.subject_kind,
             "description": self.description,
+            "policy": self.policy.to_dict(),
             "pass_rule": self.pass_rule,
             "failure_rule": self.failure_rule,
             "required_evidence_kinds": list(self.required_evidence_kinds),
@@ -1115,6 +1136,7 @@ class ExperimentGateDefinition:
                 GateSeverity(data["severity"]),
                 data["subject_kind"],
                 data["description"],
+                ExperimentGatePolicy.from_dict(data["policy"]),
                 data["pass_rule"],
                 data["failure_rule"],
                 tuple(
@@ -1140,6 +1162,10 @@ class ExperimentPlan:
     ablations: tuple[ExperimentAblation, ...]
     increment_steps: tuple[ExperimentIncrementStep, ...]
     gate_definitions: tuple[ExperimentGateDefinition, ...]
+    execution_scope_policy: ExperimentExecutionScopePolicy
+    baseline_replay_policy: ExperimentReplayPolicy
+    variant_replay_policy: ExperimentReplayPolicy
+    fixed_cutoff_policy: ExperimentFixedCutoffPolicy
     partition_rules: tuple[str, ...]
     scenario_seed_rules: tuple[str, ...]
     metric_definition_ids: tuple[str, ...]
@@ -1263,6 +1289,52 @@ class ExperimentPlan:
             self.gate_definitions
         ):
             raise ExperimentPlanError("gate codes must be unique")
+        _roundtrip(
+            self.execution_scope_policy,
+            ExperimentExecutionScopePolicy,
+            "execution_scope_policy",
+            ExperimentPlanError,
+        )
+        _roundtrip(
+            self.baseline_replay_policy,
+            ExperimentReplayPolicy,
+            "baseline_replay_policy",
+            ExperimentPlanError,
+        )
+        _roundtrip(
+            self.variant_replay_policy,
+            ExperimentReplayPolicy,
+            "variant_replay_policy",
+            ExperimentPlanError,
+        )
+        _roundtrip(
+            self.fixed_cutoff_policy,
+            ExperimentFixedCutoffPolicy,
+            "fixed_cutoff_policy",
+            ExperimentPlanError,
+        )
+        variant_ids = tuple(item.variant_id for item in self.variants)
+        if self.execution_scope_policy.variant_ids != variant_ids:
+            raise ExperimentPlanError(
+                "execution scope variants must equal the plan variants"
+            )
+        if (
+            self.baseline_replay_policy.variant_ids != (baseline[0].variant_id,)
+            or self.baseline_replay_policy.expected_sample_count != 20
+            or self.baseline_replay_policy.dataset_case_ids
+            != self.execution_scope_policy.dataset_case_ids
+            or self.variant_replay_policy.variant_ids != variant_ids[1:]
+            or self.variant_replay_policy.expected_sample_count != 125
+            or len(self.variant_replay_policy.dataset_case_ids) != 5
+            or not set(self.variant_replay_policy.dataset_case_ids).issubset(
+                self.execution_scope_policy.dataset_case_ids
+            )
+            or self.fixed_cutoff_policy.baseline_variant_id
+            != baseline[0].variant_id
+            or self.fixed_cutoff_policy.dataset_case_ids
+            != self.execution_scope_policy.dataset_case_ids
+        ):
+            raise ExperimentPlanError("replay or cutoff policy mismatch")
         for field in (
             "partition_rules",
             "scenario_seed_rules",
@@ -1302,6 +1374,10 @@ class ExperimentPlan:
             "gate_definitions": [
                 item.to_dict() for item in self.gate_definitions
             ],
+            "execution_scope_policy": self.execution_scope_policy.to_dict(),
+            "baseline_replay_policy": self.baseline_replay_policy.to_dict(),
+            "variant_replay_policy": self.variant_replay_policy.to_dict(),
+            "fixed_cutoff_policy": self.fixed_cutoff_policy.to_dict(),
             "partition_rules": list(self.partition_rules),
             "scenario_seed_rules": list(self.scenario_seed_rules),
             "metric_definition_ids": list(self.metric_definition_ids),
@@ -1346,6 +1422,18 @@ class ExperimentPlan:
                     for item in _ordered(
                         data, cls.__name__, "gate_definitions"
                     )
+                ),
+                ExperimentExecutionScopePolicy.from_dict(
+                    data["execution_scope_policy"]
+                ),
+                ExperimentReplayPolicy.from_dict(
+                    data["baseline_replay_policy"]
+                ),
+                ExperimentReplayPolicy.from_dict(
+                    data["variant_replay_policy"]
+                ),
+                ExperimentFixedCutoffPolicy.from_dict(
+                    data["fixed_cutoff_policy"]
                 ),
                 tuple(_ordered(data, cls.__name__, "partition_rules")),
                 tuple(_ordered(data, cls.__name__, "scenario_seed_rules")),

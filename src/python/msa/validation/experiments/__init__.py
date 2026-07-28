@@ -1,5 +1,11 @@
 """Public C-008C experiment-authority API."""
 
+from .authority import (
+    validate_c008c_experiment_plan,
+    validate_c008c_gate_registry,
+    validate_c008c_synthetic_dataset,
+    validate_core_experiment_baseline,
+)
 from .baseline import core_experiment_baseline
 from .contracts import (
     CORE_REFERENCE_COMMIT,
@@ -39,6 +45,16 @@ from .errors import (
 )
 from .gates import default_c008c_gate_registry
 from .plan import default_c008c_experiment_plan
+from .policy_contracts import (
+    ExperimentDegenerationRule,
+    ExperimentExecutionScopePolicy,
+    ExperimentFixedCutoffPolicy,
+    ExperimentGateParameter,
+    ExperimentGatePolicy,
+    ExperimentReplayPolicy,
+    ExperimentSampleCoverageRule,
+    GateParameterKind,
+)
 from .protected_source import (
     build_protected_source_manifest,
     validate_protected_source_manifest,
@@ -58,9 +74,14 @@ __all__ = [
     "ExperimentDatasetCase",
     "ExperimentDatasetError",
     "ExperimentDatasetManifest",
+    "ExperimentDegenerationRule",
     "ExperimentEvidenceError",
+    "ExperimentExecutionScopePolicy",
+    "ExperimentFixedCutoffPolicy",
     "ExperimentGateDefinition",
     "ExperimentGateError",
+    "ExperimentGateParameter",
+    "ExperimentGatePolicy",
     "ExperimentIncrementStep",
     "ExperimentInputError",
     "ExperimentKind",
@@ -69,9 +90,12 @@ __all__ = [
     "ExperimentPlan",
     "ExperimentPlanError",
     "ExperimentProtectedSourceError",
+    "ExperimentReplayPolicy",
+    "ExperimentSampleCoverageRule",
     "ExperimentSerializationError",
     "ExperimentValidationError",
     "ExperimentVariant",
+    "GateParameterKind",
     "GateSeverity",
     "ParameterAxisKind",
     "ProtectedSourceFile",
@@ -84,6 +108,10 @@ __all__ = [
     "core_experiment_baseline",
     "default_c008c_experiment_plan",
     "default_c008c_gate_registry",
+    "validate_c008c_experiment_plan",
+    "validate_c008c_gate_registry",
+    "validate_c008c_synthetic_dataset",
+    "validate_core_experiment_baseline",
     "validate_protected_source_manifest",
     "write_c008c_authority_evidence",
 ]

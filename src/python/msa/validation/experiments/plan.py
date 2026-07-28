@@ -26,6 +26,11 @@ from .contracts import (
 from .dataset import build_c008c_synthetic_dataset
 from .gates import default_c008c_gate_registry
 from .identity import semantic_id
+from .policy_contracts import (
+    ExperimentExecutionScopePolicy,
+    ExperimentFixedCutoffPolicy,
+    ExperimentReplayPolicy,
+)
 
 
 _AXIS_ASSUMPTIONS = (
@@ -605,6 +610,63 @@ def default_c008c_experiment_plan() -> ExperimentPlan:
     )
     variants = (*sensitivity, *ablation_variants, *increment_variants)
     gates = default_c008c_gate_registry()
+    case_ids = tuple(item.dataset_case_id for item in dataset.cases)
+    variant_ids = tuple(item.variant_id for item in variants)
+    oos_case_ids = tuple(
+        item.dataset_case_id
+        for item in dataset.cases
+        if item.partition.value == "OOS"
+    )
+    validation_case_ids = tuple(
+        item.dataset_case_id
+        for item in dataset.cases
+        if item.partition.value == "VALIDATION"
+    )
+    execution_scope_policy = ExperimentExecutionScopePolicy(
+        dataset_case_ids=case_ids,
+        variant_ids=variant_ids,
+        oos_dataset_case_ids=oos_case_ids,
+        expected_execution_pair_count=520,
+        all_pairs_required=True,
+        oos_all_variants_required=True,
+    )
+    baseline_replay_policy = ExperimentReplayPolicy(
+        policy_code="BASELINE_ALL_CASES_FULL_PAYLOAD_V1",
+        variant_ids=(variant_ids[0],),
+        dataset_case_ids=case_ids,
+        expected_sample_count=20,
+        compared_payload_kinds=(
+            "core_run",
+            "metric_evaluation_report",
+        ),
+        comparison_scope="COMPLETE_TO_DICT",
+        selection_frozen_before_outcomes=True,
+    )
+    variant_replay_policy = ExperimentReplayPolicy(
+        policy_code="ALL_NON_BASELINE_VALIDATION_SEED_2_V1",
+        variant_ids=variant_ids[1:],
+        dataset_case_ids=validation_case_ids,
+        expected_sample_count=125,
+        compared_payload_kinds=(
+            "core_run",
+            "metric_evaluation_report",
+        ),
+        comparison_scope="COMPLETE_TO_DICT",
+        selection_frozen_before_outcomes=True,
+    )
+    fixed_cutoff_policy = ExperimentFixedCutoffPolicy(
+        policy_code="BASELINE_ALL_CASES_EVERY_CAUSAL_ASOF_V1",
+        baseline_variant_id=variant_ids[0],
+        dataset_case_ids=case_ids,
+        cutoff_scope="EVERY_FORMAL_CAUSAL_ASOF",
+        compared_payload_kinds=(
+            "core_run",
+            "causal_audit_report",
+            "metric_evaluation_report",
+        ),
+        comparison_scope="COMPLETE_TO_DICT",
+        future_append_must_preserve_prefix=True,
+    )
     partition_rules = (
         "DEVELOPMENT uses seeds 0 and 1",
         "VALIDATION uses seed 2",
@@ -640,6 +702,10 @@ def default_c008c_experiment_plan() -> ExperimentPlan:
         "ablations": [item.to_dict() for item in ablations],
         "increment_steps": [item.to_dict() for item in increments],
         "gate_definitions": [item.to_dict() for item in gates],
+        "execution_scope_policy": execution_scope_policy.to_dict(),
+        "baseline_replay_policy": baseline_replay_policy.to_dict(),
+        "variant_replay_policy": variant_replay_policy.to_dict(),
+        "fixed_cutoff_policy": fixed_cutoff_policy.to_dict(),
         "partition_rules": list(partition_rules),
         "scenario_seed_rules": list(scenario_seed_rules),
         "metric_definition_ids": list(baseline.metric_definition_ids),
@@ -662,6 +728,10 @@ def default_c008c_experiment_plan() -> ExperimentPlan:
         ablations=ablations,
         increment_steps=increments,
         gate_definitions=gates,
+        execution_scope_policy=execution_scope_policy,
+        baseline_replay_policy=baseline_replay_policy,
+        variant_replay_policy=variant_replay_policy,
+        fixed_cutoff_policy=fixed_cutoff_policy,
         partition_rules=partition_rules,
         scenario_seed_rules=scenario_seed_rules,
         metric_definition_ids=baseline.metric_definition_ids,

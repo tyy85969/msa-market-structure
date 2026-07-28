@@ -2,6 +2,8 @@ import hashlib
 import subprocess
 from pathlib import Path
 
+import pytest
+
 from msa.validation.experiments import write_c008c_authority_evidence
 
 
@@ -43,3 +45,61 @@ def test_committed_evidence_is_exactly_reproducible() -> None:
     first = tuple(path.read_bytes() for path in paths)
     assert all(item.endswith(b"\n") and b"\r\n" not in item for item in first)
     assert tuple(path.read_bytes() for path in paths) == first
+
+
+def test_evidence_check_validates_every_source_authority_first(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from msa.validation.experiments import authority, protected_source
+
+    counts = {
+        "baseline": 0,
+        "dataset": 0,
+        "gates": 0,
+        "plan": 0,
+        "protected": 0,
+    }
+
+    def wrap(name: str, function: object) -> object:
+        def checked(*args: object, **kwargs: object) -> object:
+            counts[name] += 1
+            return function(*args, **kwargs)  # type: ignore[operator]
+
+        return checked
+
+    monkeypatch.setattr(
+        authority,
+        "validate_core_experiment_baseline",
+        wrap("baseline", authority.validate_core_experiment_baseline),
+    )
+    monkeypatch.setattr(
+        authority,
+        "validate_c008c_synthetic_dataset",
+        wrap("dataset", authority.validate_c008c_synthetic_dataset),
+    )
+    monkeypatch.setattr(
+        authority,
+        "validate_c008c_gate_registry",
+        wrap("gates", authority.validate_c008c_gate_registry),
+    )
+    monkeypatch.setattr(
+        authority,
+        "validate_c008c_experiment_plan",
+        wrap("plan", authority.validate_c008c_experiment_plan),
+    )
+    monkeypatch.setattr(
+        protected_source,
+        "validate_protected_source_manifest",
+        wrap(
+            "protected",
+            protected_source.validate_protected_source_manifest,
+        ),
+    )
+    protected_source.write_c008c_authority_evidence(check=True)
+    assert counts == {
+        "baseline": 1,
+        "dataset": 1,
+        "gates": 1,
+        "plan": 1,
+        "protected": 1,
+    }

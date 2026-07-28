@@ -1,5 +1,7 @@
+from copy import deepcopy
 from dataclasses import FrozenInstanceError, replace
 from decimal import ROUND_DOWN, getcontext
+import inspect
 import json
 import os
 from pathlib import Path
@@ -13,11 +15,22 @@ from msa.research.msa_core import MSACorePipeline
 from msa.research.msa_core.contracts import validate_source_input
 from msa.validation import StructuralMetricEvaluator, SyntheticScenarioKind
 from msa.validation.experiments import (
+    ExperimentPlan,
+    ExperimentPlanError,
+    ExperimentDatasetManifest,
+    ExperimentValidationError,
     build_c008c_synthetic_dataset,
     build_synthetic_source_input,
+    core_experiment_baseline,
     default_c008c_experiment_plan,
+    default_c008c_gate_registry,
+    validate_c008c_experiment_plan,
+    validate_c008c_gate_registry,
+    validate_c008c_synthetic_dataset,
+    validate_core_experiment_baseline,
     write_c008c_authority_evidence,
 )
+from msa.validation.experiments.identity import semantic_id
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -62,10 +75,11 @@ def test_plan_contains_no_metric_value_oos_outcome_or_selection() -> None:
 
 
 def test_external_future_outcomes_cannot_change_plan_identity() -> None:
+    assert not inspect.signature(default_c008c_experiment_plan).parameters
     plan_id = default_c008c_experiment_plan().experiment_plan_id
-    future_oos_bar = {"close": "999999", "available_time": "future"}
-    future_metric_outcome = {"value": "999999"}
-    assert future_oos_bar and future_metric_outcome
+    external_outcome = {"oos": {"value": "1"}}
+    external_outcome["oos"]["value"] = "999999"
+    external_outcome["winner"] = "forged"
     assert default_c008c_experiment_plan().experiment_plan_id == plan_id
 
 
@@ -77,6 +91,118 @@ def test_partitions_variants_gates_and_increment_order_are_frozen() -> None:
     assert isinstance(plan.increment_steps, tuple)
     with pytest.raises(FrozenInstanceError):
         plan.experiment_plan_id = "changed"  # type: ignore[misc]
+
+
+def test_authority_validators_do_not_call_outcome_apis(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    baseline = core_experiment_baseline()
+    dataset = build_c008c_synthetic_dataset()
+    gates = default_c008c_gate_registry()
+    plan = default_c008c_experiment_plan()
+    monkeypatch.setattr(MSACorePipeline, "run", _forbidden)
+    monkeypatch.setattr(StructuralMetricEvaluator, "evaluate", _forbidden)
+    validate_core_experiment_baseline(baseline)
+    validate_c008c_synthetic_dataset(dataset)
+    validate_c008c_gate_registry(gates)
+    validate_c008c_experiment_plan(plan)
+
+
+def test_complete_execution_replay_and_cutoff_scope_precedes_outcomes() -> None:
+    plan = default_c008c_experiment_plan()
+    assert plan.execution_scope_policy.expected_execution_pair_count == 520
+    assert len(plan.execution_scope_policy.execution_pairs()) == 520
+    assert plan.baseline_replay_policy.expected_sample_count == 20
+    assert plan.variant_replay_policy.expected_sample_count == 125
+    assert plan.fixed_cutoff_policy.cutoff_scope == (
+        "EVERY_FORMAL_CAUSAL_ASOF"
+    )
+    assert (
+        plan.execution_scope_policy.oos_all_variants_required is True
+    )
+
+
+@pytest.mark.parametrize(
+    ("gate_code", "policy_list", "field", "value"),
+    (
+        (
+            "OOS_SAMPLE_COVERAGE",
+            "sample_coverage_rules",
+            "minimum_count",
+            1,
+        ),
+        (
+            "NO_NEIGHBORHOOD_DEGENERATION",
+            "degeneration_rules",
+            "description",
+            "Outcome-adjusted degeneration",
+        ),
+    ),
+)
+def test_fully_resigned_outcome_adjusted_gate_plan_is_rejected(
+    gate_code: str,
+    policy_list: str,
+    field: str,
+    value: object,
+) -> None:
+    payload = deepcopy(default_c008c_experiment_plan().to_dict())
+    index = next(
+        index
+        for index, item in enumerate(payload["gate_definitions"])
+        if item["code"] == gate_code
+    )
+    gate = payload["gate_definitions"][index]
+    gate["policy"][policy_list][0][field] = value
+    gate["gate_definition_id"] = semantic_id(
+        "c008c-gate-definition-v1-",
+        {
+            key: item
+            for key, item in gate.items()
+            if key != "gate_definition_id"
+        },
+    )
+    payload["gate_definitions"][index] = gate
+    payload["experiment_plan_id"] = semantic_id(
+        "c008c-experiment-plan-v1-",
+        {
+            key: item
+            for key, item in payload.items()
+            if key != "experiment_plan_id"
+        },
+    )
+    forged = ExperimentPlan.from_dict(payload)
+    with pytest.raises(ExperimentPlanError):
+        validate_c008c_experiment_plan(forged)
+
+
+def test_outcomes_cannot_remove_oos_cases_or_variants() -> None:
+    dataset = deepcopy(build_c008c_synthetic_dataset().to_dict())
+    dataset["cases"] = [
+        item for item in dataset["cases"] if item["partition"] != "OOS"
+    ]
+    dataset["dataset_manifest_id"] = semantic_id(
+        "c008c-dataset-manifest-v1-",
+        {
+            key: item
+            for key, item in dataset.items()
+            if key != "dataset_manifest_id"
+        },
+    )
+    with pytest.raises(ExperimentValidationError):
+        ExperimentDatasetManifest.from_dict(dataset)
+
+    plan = deepcopy(default_c008c_experiment_plan().to_dict())
+    plan["variants"].pop()
+    plan["experiment_plan_id"] = semantic_id(
+        "c008c-experiment-plan-v1-",
+        {
+            key: item
+            for key, item in plan.items()
+            if key != "experiment_plan_id"
+        },
+    )
+    with pytest.raises(ExperimentValidationError):
+        ExperimentPlan.from_dict(plan)
 
 
 def test_context_tuple_permutation_canonicalizes_to_same_formal_input() -> None:

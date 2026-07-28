@@ -20,6 +20,19 @@ def repository_root() -> Path:
     return Path(__file__).resolve().parents[5]
 
 
+def _resolve_root(
+    root: Path | None, error_type: type[ValueError]
+) -> Path:
+    if root is None:
+        return repository_root()
+    if not isinstance(root, Path):
+        raise error_type("root must be pathlib.Path or None")
+    try:
+        return root.resolve()
+    except (OSError, RuntimeError) as exc:
+        raise error_type("unable to resolve repository root") from exc
+
+
 def _category(relative_path: str) -> str:
     if relative_path.startswith("src/python/msa/reference/"):
         return "REFERENCE"
@@ -83,8 +96,21 @@ def _entry(root: Path, path: Path) -> ProtectedSourceFile:
 def build_protected_source_manifest(
     root: Path | None = None,
 ) -> ProtectedSourceManifest:
-    base = repository_root() if root is None else root.resolve()
-    files = tuple(_entry(base, item) for item in _protected_paths(base))
+    base = _resolve_root(root, ExperimentProtectedSourceError)
+    try:
+        files = tuple(_entry(base, item) for item in _protected_paths(base))
+    except (
+        AssertionError,
+        AttributeError,
+        KeyError,
+        OSError,
+        RuntimeError,
+        TypeError,
+        ValueError,
+    ) as exc:
+        raise ExperimentProtectedSourceError(
+            "unable to read protected source authority"
+        ) from exc
     payload = {
         "execution_base_commit": EXECUTION_BASE_COMMIT,
         "core_reference_commit": CORE_REFERENCE_COMMIT,
@@ -110,18 +136,28 @@ def validate_protected_source_manifest(
             "manifest must be ProtectedSourceManifest"
         )
     try:
-        restored = ProtectedSourceManifest.from_dict(manifest.to_dict())
+        original_payload = manifest.to_dict()
+        restored = ProtectedSourceManifest.from_dict(original_payload)
+        restored_payload = restored.to_dict()
+        current = build_protected_source_manifest(root)
+        current_payload = current.to_dict()
     except (
+        AssertionError,
         AttributeError,
         KeyError,
+        OSError,
+        RuntimeError,
         TypeError,
         ValueError,
     ) as exc:
         raise ExperimentProtectedSourceError(
             "manifest is not formally valid"
         ) from exc
-    current = build_protected_source_manifest(root)
-    if restored != manifest or manifest.to_dict() != current.to_dict():
+    if (
+        restored != manifest
+        or restored_payload != original_payload
+        or original_payload != current_payload
+    ):
         raise ExperimentProtectedSourceError(
             "protected source differs from the frozen manifest"
         )
@@ -137,23 +173,53 @@ def write_c008c_authority_evidence(
 
     from .baseline import core_experiment_baseline
     from .dataset import build_c008c_synthetic_dataset
+    from .gates import default_c008c_gate_registry
     from .plan import default_c008c_experiment_plan
+    from .authority import (
+        validate_c008c_experiment_plan,
+        validate_c008c_gate_registry,
+        validate_c008c_synthetic_dataset,
+        validate_core_experiment_baseline,
+    )
 
-    base = repository_root() if root is None else root.resolve()
+    base = _resolve_root(root, ExperimentEvidenceError)
     evidence_dir = base / "docs/validation/evidence"
+    try:
+        baseline = core_experiment_baseline()
+        dataset = build_c008c_synthetic_dataset()
+        gates = default_c008c_gate_registry()
+        plan = default_c008c_experiment_plan()
+        protected = build_protected_source_manifest(base)
+        validate_core_experiment_baseline(baseline)
+        validate_c008c_synthetic_dataset(dataset)
+        validate_c008c_gate_registry(gates)
+        validate_c008c_experiment_plan(plan)
+        validate_protected_source_manifest(protected, base)
+    except (
+        AssertionError,
+        AttributeError,
+        KeyError,
+        OSError,
+        RuntimeError,
+        TypeError,
+        ValueError,
+    ) as exc:
+        raise ExperimentEvidenceError(
+            "C-008C source authority validation failed"
+        ) from exc
     values = (
-        ("c008c_baseline_snapshot.json", core_experiment_baseline().to_dict()),
+        ("c008c_baseline_snapshot.json", baseline.to_dict()),
         (
             "c008c_dataset_manifest.json",
-            build_c008c_synthetic_dataset().to_dict(),
+            dataset.to_dict(),
         ),
         (
             "c008c_experiment_plan.json",
-            default_c008c_experiment_plan().to_dict(),
+            plan.to_dict(),
         ),
         (
             "c008c_protected_source_manifest.json",
-            build_protected_source_manifest(base).to_dict(),
+            protected.to_dict(),
         ),
     )
     paths = tuple(evidence_dir / name for name, _ in values)
