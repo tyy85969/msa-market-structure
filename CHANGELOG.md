@@ -64,6 +64,7 @@
 - Added the C-008B immutable structural metric contracts, frozen ten-formula registry, causal event extraction and ATR, explicit right-censored observations, deterministic resonance matching, aggregate/report validation, and no-lookahead coverage without changing C-007 or C-008A semantics.
 - Bound C-008B reports to the complete source Run payload, closed caller-supplied Event injection, fixed the exact Turn resolution window, corrected metric formula documentation, and replaced isolated scale outcomes with a formal 100+ frame end-to-end evaluator scenario.
 - Added the explicit, authority-bound Core Alpha v1 reference configuration profile without changing generic Core defaults or C-007/C-008 semantics.
+- Added the predeclared C-008C experiment authority, deterministic synthetic dataset partitions, OAT sensitivity and ablation/increment plan, hard-gate and protected-source manifests, canonical LF evidence, and no-lookahead plan tests without executing outcomes.
 
 ### Added
 - 初始化 MSA 项目仓库。
