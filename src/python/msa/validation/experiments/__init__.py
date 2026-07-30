@@ -10,6 +10,7 @@ from .baseline import core_experiment_baseline
 from .contracts import (
     CORE_REFERENCE_COMMIT,
     EXECUTION_BASE_COMMIT,
+    PROTECTED_SOURCE_BYTE_POLICY,
     SCHEMA_VERSION,
     AblationSupportStatus,
     CoreExperimentBaseline,
@@ -29,9 +30,13 @@ from .contracts import (
     ProtectedSourceFile,
     ProtectedSourceManifest,
     RealMarketOOSStatus,
+    SyntheticDatasetCapacityPolicy,
     VariantLevel,
 )
-from .dataset import build_c008c_synthetic_dataset
+from .dataset import (
+    build_c008c_synthetic_dataset,
+    c008c_synthetic_dataset_capacity_policy,
+)
 from .errors import (
     ExperimentConfigurationError,
     ExperimentDatasetError,
@@ -65,6 +70,7 @@ from .synthetic_suite import build_synthetic_source_input
 __all__ = [
     "CORE_REFERENCE_COMMIT",
     "EXECUTION_BASE_COMMIT",
+    "PROTECTED_SOURCE_BYTE_POLICY",
     "SCHEMA_VERSION",
     "AblationSupportStatus",
     "CoreExperimentBaseline",
@@ -101,10 +107,12 @@ __all__ = [
     "ProtectedSourceFile",
     "ProtectedSourceManifest",
     "RealMarketOOSStatus",
+    "SyntheticDatasetCapacityPolicy",
     "VariantLevel",
     "build_c008c_synthetic_dataset",
     "build_protected_source_manifest",
     "build_synthetic_source_input",
+    "c008c_synthetic_dataset_capacity_policy",
     "core_experiment_baseline",
     "default_c008c_experiment_plan",
     "default_c008c_gate_registry",

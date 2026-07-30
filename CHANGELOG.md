@@ -66,6 +66,7 @@
 - Added the explicit, authority-bound Core Alpha v1 reference configuration profile without changing generic Core defaults or C-007/C-008 semantics.
 - Added the predeclared C-008C experiment authority, deterministic synthetic dataset partitions, OAT sensitivity and ablation/increment plan, hard-gate and protected-source manifests, canonical LF evidence, and no-lookahead plan tests without executing outcomes.
 - Bound C-008C authority to its formal factories, replaced placeholder gates with typed policies, and froze the 520-pair execution scope, replay/cutoff samples, OOS coverage minima, and degeneration rules.
+- Pinned all 77 protected Python paths to LF raw worktree bytes and expanded every C-008C synthetic case to 32 pre-confirm plus 64 post-confirm complete H1 bars under a frozen capacity policy.
 
 ### Added
 - 初始化 MSA 项目仓库。

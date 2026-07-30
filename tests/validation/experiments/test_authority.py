@@ -14,6 +14,7 @@ from msa.validation.experiments import (
     ExperimentPlan,
     ExperimentPlanError,
     ExperimentProtectedSourceError,
+    ExperimentValidationError,
     ProtectedSourceManifest,
     build_c008c_synthetic_dataset,
     build_protected_source_manifest,
@@ -149,17 +150,24 @@ def test_fully_resigned_dataset_manifest_metadata_is_not_authority(
         validate_c008c_synthetic_dataset(forged)
 
 
+def test_fully_resigned_capacity_policy_cannot_relax_authority() -> None:
+    payload = deepcopy(build_c008c_synthetic_dataset().to_dict())
+    payload["capacity_policy"]["minimum_pre_confirm_completed_bars"] = 19
+    resigned = _resign_dataset(payload)
+    with pytest.raises(ExperimentValidationError):
+        ExperimentDatasetManifest.from_dict(resigned)
+
+
 def test_rebuilt_bar_and_all_associated_objects_are_not_authority(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     from msa.validation.experiments import synthetic_suite
 
-    prices = dict(synthetic_suite._BASE_PRICES)
-    changed = list(prices[next(iter(prices))])
-    changed[0] = str(Decimal(changed[0]) + Decimal("0.125"))
-    prices[next(iter(prices))] = tuple(changed)
+    prices = dict(synthetic_suite._SCENARIO_BASE_PRICES)
+    key = next(iter(prices))
+    prices[key] = str(Decimal(prices[key]) + Decimal("0.125"))
     with monkeypatch.context() as context:
-        context.setattr(synthetic_suite, "_BASE_PRICES", prices)
+        context.setattr(synthetic_suite, "_SCENARIO_BASE_PRICES", prices)
         forged = build_c008c_synthetic_dataset()
     ExperimentDatasetManifest.from_dict(forged.to_dict())
     with pytest.raises(ExperimentDatasetError):
@@ -267,6 +275,14 @@ def test_fully_resigned_protected_source_is_rejected(field: str) -> None:
     forged = ProtectedSourceManifest.from_dict(_resign_protected(payload))
     with pytest.raises(ExperimentProtectedSourceError):
         validate_protected_source_manifest(forged)
+
+
+def test_fully_resigned_protected_byte_policy_is_rejected() -> None:
+    payload = deepcopy(build_protected_source_manifest().to_dict())
+    payload["byte_policy"] = "CRLF_OR_LF_EQUIVALENT"
+    resigned = _resign_protected(payload)
+    with pytest.raises(ExperimentValidationError):
+        ProtectedSourceManifest.from_dict(resigned)
 
 
 def test_normal_authorities_validate_exactly() -> None:

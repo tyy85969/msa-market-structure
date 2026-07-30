@@ -41,22 +41,25 @@ def test_c008c_authority_goldens() -> None:
         [item.increment_step_id for item in plan.increment_steps]
     ) == "4417a630d6e798858d2f7b0d19db92f1bd5cafa82a56ae81b03255a168e99abb"
     assert digest([item.dataset_case_id for item in dataset.cases]) == (
-        "6161e00ef6752cfb69288a5073c7c5b94053aab8adc489357c1190938a954a2f"
+        "38a038f7cb4f71bf65e7f2ec58e38766b75fa2427918b47f0224e22a3c84fe55"
+    )
+    assert digest(dataset.capacity_policy.to_dict()) == (
+        "0c51d47b6af1697b6d2aec9794670b485f67713bfc92320ca7071804b82cfbc8"
     )
     assert digest(
         [item.gate_definition_id for item in plan.gate_definitions]
     ) == "20d76739fa7c3fb40e4679da30725126013acbf9754e5d13dd8c5b6d6604e83d"
     assert digest(plan.execution_scope_policy.to_dict()) == (
-        "7ca6eae71e48824c4535072555dab59e5e56c443f8896bdd99425acab1e60e6c"
+        "3a1e0bb3aa6fb92eff7c6683838cd19c2f58d40bff2dabb94290c1cf1c30bb4a"
     )
     assert digest(plan.baseline_replay_policy.to_dict()) == (
-        "fb95bf4f6552db8c57b07d0f8aa559b84e1bc3bafd76472840c9ccc5a1f72c1d"
+        "e62f0b7613184e6f7d189adacb771cec7e568d9d90a427d29f3faf64c242198b"
     )
     assert digest(plan.variant_replay_policy.to_dict()) == (
-        "02b002dcb0d595487d5f5c3d5e264b895a98daa71d2be6ba14b34f1c0d843491"
+        "9655ef68dbb73b14e884b1e44f93659721c376bc0d75b5a3a685e1322a403184"
     )
     assert digest(plan.fixed_cutoff_policy.to_dict()) == (
-        "fb34e5714c2d80c9e5a64b2e34178b4db5201f57dd142b72da691de6d7aec353"
+        "58d32c64f784a957d7ab3a86ae62237002b94f6de995744409b52f216abc4504"
     )
     gates = {item.code: item for item in plan.gate_definitions}
     assert digest(
@@ -77,15 +80,15 @@ def test_c008c_authority_goldens() -> None:
     ) == "1280b1f872e36cdafcd65c7e20effe2c3447bb267e0ec999be3e2bd1f5b20521"
     assert dataset.dataset_manifest_id == (
         "c008c-dataset-manifest-v1-"
-        "5ae72c0d36c37be670c9a7c1e3f2c6e048ef9e92277eaf02e458b6a7ca6f817a"
+        "a5ccee417d80899d3af0d6d84168f29f6aef92712f4cddfc673ff4451520c548"
     )
     assert plan.experiment_plan_id == (
         "c008c-experiment-plan-v1-"
-        "619005d8808d6664a5b36d7968635f78fc75f32cd23b0e7cb6169c34c4d70b68"
+        "fb38f9cc47d2d4396fa9ad26b74c3e821d07fca6e926e40bc319e819bda611b5"
     )
     assert protected.protected_source_manifest_id == (
         "c008c-protected-source-manifest-v1-"
-        "cea251f4dad8d2c4a015ecc9f3c1a6d881af6971ccab382c1d486aad1fc04704"
+        "f93cda3d0966ee1340addebe36e8c008591d94d19d966828471721a18fdf2356"
     )
 
 
@@ -95,13 +98,13 @@ def test_evidence_file_sha256_goldens() -> None:
             "9b141b4f7614bbd14c76f25c3f6271c7a1db913968d2f4072b8ca6980d9fb7cf"
         ),
         "c008c_dataset_manifest.json": (
-            "612c0f89bea1f78900a85e41508635818132eea5ebf7b4e9598c5e7963956a0d"
+            "76f3f4f5da8b92aa6c3306c33c593092d32aa5ef5160e493e7fc7234613fbd32"
         ),
         "c008c_experiment_plan.json": (
-            "1e00ab471410f724611924d82fd2af2881e5b9a76cb1518e178212f189faa80f"
+            "262f9f3bd9a38b7c28699026391ae45ff096efe916faf9c44c46cd9d8e12535c"
         ),
         "c008c_protected_source_manifest.json": (
-            "4b8dba41d5250d530a981b4afedb989407765ac94b0ddc5561bb244760dd950b"
+            "a4651a946ddc3731d35953e01d2018874672504a48eba74e87819ffb47d649a7"
         ),
     }
     for name, value in expected.items():

@@ -10,6 +10,7 @@ from .contracts import (
     ExperimentDatasetCase,
     ExperimentDatasetManifest,
     RealMarketOOSStatus,
+    SyntheticDatasetCapacityPolicy,
 )
 from .identity import digest, semantic_id
 from .synthetic_suite import build_synthetic_source_input
@@ -37,6 +38,20 @@ _SEED_RULES = (
     "VALIDATION uses seed 2",
     "OOS uses seed 3",
 )
+
+
+def c008c_synthetic_dataset_capacity_policy(
+) -> SyntheticDatasetCapacityPolicy:
+    return SyntheticDatasetCapacityPolicy(
+        minimum_pre_confirm_completed_bars=20,
+        minimum_post_confirm_completed_bars=24,
+        generated_warmup_bars=32,
+        generated_post_confirm_bars=64,
+        maximum_atr_period=20,
+        maximum_outcome_horizon_bars=24,
+        all_bars_must_be_complete=True,
+        no_external_data=True,
+    )
 
 
 def _partition(seed: int) -> DatasetPartition:
@@ -77,6 +92,7 @@ def _case(kind: SyntheticScenarioKind, seed: int) -> ExperimentDatasetCase:
 
 
 def build_c008c_synthetic_dataset() -> ExperimentDatasetManifest:
+    capacity_policy = c008c_synthetic_dataset_capacity_policy()
     cases = tuple(
         _case(kind, seed)
         for kind in SyntheticScenarioKind
@@ -84,6 +100,7 @@ def build_c008c_synthetic_dataset() -> ExperimentDatasetManifest:
     )
     payload = {
         "cases": [item.to_dict() for item in cases],
+        "capacity_policy": capacity_policy.to_dict(),
         "scenario_order": [item.value for item in SyntheticScenarioKind],
         "partition_order": [
             DatasetPartition.DEVELOPMENT.value,
@@ -102,6 +119,7 @@ def build_c008c_synthetic_dataset() -> ExperimentDatasetManifest:
             "c008c-dataset-manifest-v1-", payload
         ),
         cases=cases,
+        capacity_policy=capacity_policy,
         scenario_order=tuple(SyntheticScenarioKind),
         partition_order=(
             DatasetPartition.DEVELOPMENT,

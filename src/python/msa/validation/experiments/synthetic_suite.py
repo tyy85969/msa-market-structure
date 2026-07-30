@@ -30,6 +30,7 @@ from msa.reference import core_alpha_v1_config
 from msa.research.lifecycle import (
     LifecycleConfig,
     LifecycleEngine,
+    LifecycleHistory,
     LifecycleInput,
 )
 from msa.research.msa_core.contracts import validate_source_input
@@ -50,18 +51,31 @@ from .errors import ExperimentInputError
 
 UTC = timezone.utc
 START = datetime(2026, 1, 1, tzinfo=UTC)
+GENERATED_WARMUP_BARS = 32
+GENERATED_POST_CONFIRM_BARS = 64
+GENERATED_TOTAL_BARS = GENERATED_WARMUP_BARS + GENERATED_POST_CONFIRM_BARS
+DATA_START = START - timedelta(hours=GENERATED_WARMUP_BARS)
+LIFECYCLE_BREAK_BUFFER = Decimal("1")
 PRIMARY = ScaleDescriptor("primary", 1)
 MACRO = ScaleDescriptor("macro", 2)
 H4_PRIMARY = ResonanceContext(Timeframe.H4, PRIMARY)
 H12_MACRO = ResonanceContext(Timeframe.H12, MACRO)
 
-_BASE_PRICES = {
-    SyntheticScenarioKind.SINGLE_TREND: ("98", "101", "104", "107"),
-    SyntheticScenarioKind.RANGE: ("100", "102", "99", "101"),
-    SyntheticScenarioKind.V_REVERSAL: ("105", "99", "102", "106"),
-    SyntheticScenarioKind.FALSE_BREAK: ("100", "109", "101", "100"),
-    SyntheticScenarioKind.GAP_SHOCK: ("99", "100", "114", "112"),
+_SCENARIO_BASE_PRICES = {
+    SyntheticScenarioKind.SINGLE_TREND: "100",
+    SyntheticScenarioKind.RANGE: "102",
+    SyntheticScenarioKind.V_REVERSAL: "104",
+    SyntheticScenarioKind.FALSE_BREAK: "106",
+    SyntheticScenarioKind.GAP_SHOCK: "108",
 }
+_RANGE_OFFSETS = (
+    Decimal("-2"),
+    Decimal("-1"),
+    Decimal("1"),
+    Decimal("2"),
+    Decimal("1"),
+    Decimal("-1"),
+)
 
 
 def _source_name(kind: SyntheticScenarioKind, seed: int) -> str:
@@ -72,7 +86,73 @@ def _prices(
     kind: SyntheticScenarioKind, seed: int
 ) -> tuple[Decimal, ...]:
     offset = Decimal(seed) / Decimal("10")
-    return tuple(Decimal(item) + offset for item in _BASE_PRICES[kind])
+    base = Decimal(_SCENARIO_BASE_PRICES[kind]) + offset
+    if kind is SyntheticScenarioKind.SINGLE_TREND:
+        return tuple(
+            base - Decimal("8") + Decimal(index) * Decimal("0.2")
+            for index in range(GENERATED_TOTAL_BARS)
+        )
+    if kind is SyntheticScenarioKind.RANGE:
+        return tuple(
+            base + _RANGE_OFFSETS[index % len(_RANGE_OFFSETS)]
+            for index in range(GENERATED_TOTAL_BARS)
+        )
+    if kind is SyntheticScenarioKind.V_REVERSAL:
+        return tuple(
+            (
+                base
+                + Decimal("8")
+                - Decimal(index) * Decimal("0.25")
+                if index < 48
+                else base
+                - Decimal("4")
+                + Decimal(index - 48) * Decimal("0.35")
+            )
+            for index in range(GENERATED_TOTAL_BARS)
+        )
+    if kind is SyntheticScenarioKind.FALSE_BREAK:
+        values: list[Decimal] = []
+        for index in range(GENERATED_TOTAL_BARS):
+            if index < GENERATED_WARMUP_BARS:
+                values.append(
+                    base
+                    + _RANGE_OFFSETS[index % len(_RANGE_OFFSETS)]
+                    / Decimal("4")
+                )
+                continue
+            post_index = index - GENERATED_WARMUP_BARS
+            if post_index < 8:
+                values.append(base + Decimal(post_index) * Decimal("0.25"))
+            elif post_index == 8:
+                values.append(base + Decimal("12"))
+            elif post_index == 9:
+                values.append(base + Decimal("8"))
+            else:
+                values.append(
+                    base
+                    + _RANGE_OFFSETS[post_index % len(_RANGE_OFFSETS)]
+                    / Decimal("2")
+                )
+        return tuple(values)
+    values = []
+    for index in range(GENERATED_TOTAL_BARS):
+        if index < GENERATED_WARMUP_BARS:
+            values.append(
+                base
+                + _RANGE_OFFSETS[index % len(_RANGE_OFFSETS)]
+                / Decimal("4")
+            )
+            continue
+        post_index = index - GENERATED_WARMUP_BARS
+        if post_index < 12:
+            values.append(base + Decimal(post_index) * Decimal("0.1"))
+        else:
+            values.append(
+                base
+                + Decimal("14")
+                + Decimal(post_index - 12) * Decimal("0.1")
+            )
+    return tuple(values)
 
 
 def _bar(
@@ -81,7 +161,7 @@ def _bar(
     *,
     source: str,
 ) -> CanonicalBar:
-    timestamp = START + timedelta(hours=index + 1)
+    timestamp = DATA_START + timedelta(hours=index)
     end_time = timestamp + timedelta(hours=1)
     return CanonicalBar(
         symbol="XAUUSD",
@@ -89,8 +169,8 @@ def _bar(
         timestamp=timestamp,
         end_time=end_time,
         open=close,
-        high=close + Decimal("5"),
-        low=close - Decimal("5"),
+        high=close + Decimal("0.75"),
+        low=close - Decimal("0.75"),
         close=close,
         volume=None,
         volume_type=VolumeType.UNAVAILABLE,
@@ -185,10 +265,9 @@ def _subject(
 
 
 def _subjects(
-    kind: SyntheticScenarioKind, seed: int, prices: tuple[Decimal, ...]
+    kind: SyntheticScenarioKind, seed: int, center: Decimal
 ) -> tuple[BoundaryRef, ...]:
     tag = _source_name(kind, seed)
-    center = prices[0]
     return (
         _subject(
             f"{tag}-upper-primary",
@@ -233,10 +312,10 @@ def _lifecycle_config() -> LifecycleConfig:
     return LifecycleConfig(
         engine_id="c006a-c008c-synthetic",
         engine_version="1.0.0",
-        policy_id="c008c-synthetic-lifecycle-v1",
+        policy_id="c008c-synthetic-lifecycle-capacity-v1",
         observation_timeframe=Timeframe.H1,
         test_tolerance=Decimal("0"),
-        break_buffer=Decimal("100"),
+        break_buffer=LIFECYCLE_BREAK_BUFFER,
         weakening_test_count=2,
         minimum_test_separation_bars=1,
         flip_tolerance=Decimal("0"),
@@ -263,6 +342,22 @@ def _timeframe_history(history: object, context: ResonanceContext) -> object:
     )
 
 
+def _lifecycle_history(
+    data: LoadResult, subjects: tuple[BoundaryRef, ...]
+) -> LifecycleHistory:
+    engine = LifecycleEngine(_lifecycle_config())
+    source = LifecycleInput(data, subjects)
+    confirm_snapshot = engine.build_as_of(source, START)
+    final_snapshot = engine.build_as_of(
+        source, data.bars[-1].available_time
+    )
+    return LifecycleHistory(
+        events=final_snapshot.events,
+        snapshots=(confirm_snapshot, final_snapshot),
+        final_snapshot=final_snapshot,
+    )
+
+
 def build_synthetic_source_input(
     kind: SyntheticScenarioKind, seed: int
 ) -> ResonanceFrameInput:
@@ -275,13 +370,16 @@ def build_synthetic_source_input(
     try:
         source = _source_name(kind, seed)
         prices = _prices(kind, seed)
+        center = Decimal(_SCENARIO_BASE_PRICES[kind]) + (
+            Decimal(seed) / Decimal("10")
+        )
         bars = tuple(
             _bar(index, close, source=source)
             for index, close in enumerate(prices)
         )
         data = _load_result(bars, source)
-        lifecycle_history = LifecycleEngine(_lifecycle_config()).build_batch(
-            LifecycleInput(data, _subjects(kind, seed, prices))
+        lifecycle_history = _lifecycle_history(
+            data, _subjects(kind, seed, center)
         )
         histories = tuple(
             _timeframe_history(lifecycle_history, context)

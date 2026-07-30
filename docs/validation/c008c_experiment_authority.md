@@ -101,7 +101,12 @@ Outcomes cannot reorder the ladder.
 
 The production-owned deterministic generator covers SINGLE_TREND, RANGE,
 V_REVERSAL, FALSE_BREAK, and GAP_SHOCK. It constructs formal
-`ResonanceFrameInput` values using only public production contracts.
+`ResonanceFrameInput` values using only public production contracts. Every
+case contains exactly 96 complete H1 bars: 32 completed warm-up bars available
+by the earliest structural ConfirmTime and 64 completed bars afterward.
+FALSE_BREAK crosses and then returns through the public Lifecycle threshold
+with the fixed documented `break_buffer=1`; GAP_SHOCK contains an explicit
+price jump. These paths are engineering scenarios, not optimized parameters.
 
 ## 16. Seeds
 
@@ -115,8 +120,13 @@ Seeds 0 and 1 are DEVELOPMENT, seed 2 is VALIDATION, and seed 3 is OOS. The
 twenty source-input payload digests and case IDs are unique, so no input is
 reused across partitions.
 `validate_c008c_synthetic_dataset()` binds every case field, complete source
-input, causal expectations, assumptions, ordering rule, and identity to the
-production Builder rather than trusting re-signed nested IDs.
+input, causal expectations, assumptions, ordering rule, capacity policy, and
+identity to the production Builder rather than trusting re-signed nested IDs.
+`SyntheticDatasetCapacityPolicy` freezes minimum pre/post-ConfirmTime coverage
+at 20/24 bars, generated coverage at 32/64 bars, maximum ATR period 20, maximum
+formal outcome horizon 24, complete bars only, and no external data. The policy
+enters both Dataset and Plan identity. C-008C-A proves temporal feasibility
+only and does not run the metric evaluator.
 
 ## 18. OOS locking
 
@@ -144,7 +154,9 @@ The protected manifest covers all Python files under `msa.reference` and
 `msa.research`, the four specified causal-validation files, and all structural
 metric Python files. Tests, docs, build/cache files, and the experiments
 package itself are excluded. Paths are POSIX-relative, unique, sorted, and
-bound to byte size and SHA-256.
+bound to byte size and SHA-256. The manifest identity includes byte policy
+`LF_CANONICAL_WORKTREE_BYTES_V1`. `_entry()` hashes raw `read_bytes()` without
+normalization and fails on any CR byte; validation never repairs a file.
 
 ## 22. Determinism
 
@@ -162,10 +174,18 @@ were not modified. The repository now declares:
 ```text
 docs/reference/*.json text eol=lf
 docs/validation/evidence/*.json text eol=lf
+src/python/msa/reference/** text eol=lf
+src/python/msa/research/** text eol=lf
+src/python/msa/validation/metrics/** text eol=lf
+src/python/msa/validation/causal_audit.py text eol=lf
+src/python/msa/validation/comparison.py text eol=lf
+src/python/msa/validation/contracts.py text eol=lf
+src/python/msa/validation/metric_registry.py text eol=lf
 ```
 
-A fresh detached worktree proved the reference JSON remained LF-only, retained
-SHA-256
+A fresh detached worktree proved the reference JSON and all 77 protected
+Python files remained LF-only. It rebuilt the Protected Source Manifest
+byte-for-byte, passed evidence `--check`, retained Reference SHA-256
 `f7cae328c78e5f1e7bdb69cdb4eb3f8bada9d7facae656cbd8652751a24db396`,
 passed the Reference Golden, and remained clean.
 
@@ -190,8 +210,9 @@ payload that differs from its formal Factory.
 ## 26. Synthetic limitations
 
 Synthetic paths prove deterministic engineering and causal-contract behavior
-only. They do not represent market distributions, statistical power,
-capacity, profitability, or production readiness.
+and sufficient declared time-window capacity only. They do not represent
+market distributions, statistical power, real-market sample capacity,
+profitability, or production readiness.
 
 ## 27. No trading interpretation
 
@@ -260,5 +281,6 @@ never imply better parameters.
 `validate_c008c_experiment_plan()` performs a strict round-trip and then
 compares the complete payload with `default_c008c_experiment_plan()`. This
 binds Baseline/Dataset identities, all axes and variants, all ablations and
-increments, every Gate Policy, execution/replay/cutoff scope, registries,
-protocol text, OOS status, assumptions, and Plan identity.
+increments, the Dataset Capacity Policy, every Gate Policy,
+execution/replay/cutoff scope, registries, protocol text, OOS status,
+assumptions, and Plan identity.

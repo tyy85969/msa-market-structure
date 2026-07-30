@@ -110,6 +110,10 @@ def test_authority_validators_do_not_call_outcome_apis(
 
 def test_complete_execution_replay_and_cutoff_scope_precedes_outcomes() -> None:
     plan = default_c008c_experiment_plan()
+    assert plan.dataset_capacity_policy.generated_warmup_bars == 32
+    assert plan.dataset_capacity_policy.generated_post_confirm_bars == 64
+    assert plan.dataset_capacity_policy.maximum_atr_period == 20
+    assert plan.dataset_capacity_policy.maximum_outcome_horizon_bars == 24
     assert plan.execution_scope_policy.expected_execution_pair_count == 520
     assert len(plan.execution_scope_policy.execution_pairs()) == 520
     assert plan.baseline_replay_policy.expected_sample_count == 20
@@ -193,6 +197,21 @@ def test_outcomes_cannot_remove_oos_cases_or_variants() -> None:
 
     plan = deepcopy(default_c008c_experiment_plan().to_dict())
     plan["variants"].pop()
+    plan["experiment_plan_id"] = semantic_id(
+        "c008c-experiment-plan-v1-",
+        {
+            key: item
+            for key, item in plan.items()
+            if key != "experiment_plan_id"
+        },
+    )
+    with pytest.raises(ExperimentValidationError):
+        ExperimentPlan.from_dict(plan)
+
+
+def test_outcomes_cannot_relax_dataset_capacity_policy() -> None:
+    plan = deepcopy(default_c008c_experiment_plan().to_dict())
+    plan["dataset_capacity_policy"]["maximum_outcome_horizon_bars"] = 12
     plan["experiment_plan_id"] = semantic_id(
         "c008c-experiment-plan-v1-",
         {

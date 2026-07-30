@@ -697,6 +697,7 @@ def default_c008c_experiment_plan() -> ExperimentPlan:
     payload = {
         "baseline_id": baseline.baseline_id,
         "dataset_manifest_id": dataset.dataset_manifest_id,
+        "dataset_capacity_policy": dataset.capacity_policy.to_dict(),
         "axes": [item.to_dict() for item in axes],
         "variants": [item.to_dict() for item in variants],
         "ablations": [item.to_dict() for item in ablations],
@@ -723,6 +724,7 @@ def default_c008c_experiment_plan() -> ExperimentPlan:
         ),
         baseline_id=baseline.baseline_id,
         dataset_manifest_id=dataset.dataset_manifest_id,
+        dataset_capacity_policy=dataset.capacity_policy,
         axes=axes,
         variants=variants,
         ablations=ablations,

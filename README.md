@@ -79,11 +79,14 @@ baseline, twenty deterministic synthetic dataset cases and partitions, eight
 OAT sensitivity axes, supported and unsupported ablations, the five-step
 increment ladder, twenty-seven hard-gate definitions, protected-source
 manifest, and canonical evidence. Source-bound validators reject fully
-re-signed deviations. Typed Gate Policies also freeze all 520 execution pairs,
-20 Baseline and 125 Variant replay samples, every-causal-AsOf cutoff scope,
-OOS coverage minima, and ten degeneration rules. It executes no experiment
-outcome, performs no parameter optimization, and adds no trading behavior. See
-`docs/validation/c008c_experiment_authority.md`.
+re-signed deviations. A frozen Dataset Capacity Policy requires 32 pre-confirm
+and 64 post-confirm complete H1 bars per case, covering ATR 20 and horizon 24.
+Typed Gate Policies also freeze all 520 execution pairs, 20 Baseline and 125
+Variant replay samples, every-causal-AsOf cutoff scope, OOS coverage minima,
+and ten degeneration rules. Protected source uses raw LF worktree bytes under
+repository attributes and rejects CRLF without repair. It executes no
+experiment outcome, performs no parameter optimization, and adds no trading
+behavior. See `docs/validation/c008c_experiment_authority.md`.
 
 ## 近期里程碑
 

@@ -16,6 +16,7 @@ from msa.reference import (
     validate_core_alpha_v1_config,
     validate_core_alpha_v1_profile,
 )
+from msa.research.lifecycle import LifecycleEventType
 from msa.research.msa_core import MSACoreConfig
 from msa.research.msa_core.contracts import validate_source_input
 from msa.research.resonance import ResonanceFrameInput
@@ -42,6 +43,7 @@ from .policy_contracts import (
 SCHEMA_VERSION = 1
 EXECUTION_BASE_COMMIT = "6f4ebef19164156728438b480867660db3b1cd65"
 CORE_REFERENCE_COMMIT = "d72c18f7994afd506e6ecf044571ccffbc695631"
+PROTECTED_SOURCE_BYTE_POLICY = "LF_CANONICAL_WORKTREE_BYTES_V1"
 
 
 class _ExperimentEnum(str, Enum):
@@ -900,9 +902,87 @@ class ExperimentDatasetCase:
 
 
 @dataclass(frozen=True, slots=True)
+class SyntheticDatasetCapacityPolicy:
+    minimum_pre_confirm_completed_bars: int
+    minimum_post_confirm_completed_bars: int
+    generated_warmup_bars: int
+    generated_post_confirm_bars: int
+    maximum_atr_period: int
+    maximum_outcome_horizon_bars: int
+    all_bars_must_be_complete: bool
+    no_external_data: bool
+    schema_version: int = SCHEMA_VERSION
+
+    def __post_init__(self) -> None:
+        _schema(self.schema_version, type(self).__name__, ExperimentDatasetError)
+        expected = {
+            "minimum_pre_confirm_completed_bars": 20,
+            "minimum_post_confirm_completed_bars": 24,
+            "generated_warmup_bars": 32,
+            "generated_post_confirm_bars": 64,
+            "maximum_atr_period": 20,
+            "maximum_outcome_horizon_bars": 24,
+            "all_bars_must_be_complete": True,
+            "no_external_data": True,
+        }
+        for field_name, expected_value in expected.items():
+            value = getattr(self, field_name)
+            if type(value) is not type(expected_value) or value != expected_value:
+                raise ExperimentDatasetError(
+                    f"{field_name} must equal the frozen capacity authority"
+                )
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "schema_version": self.schema_version,
+            "minimum_pre_confirm_completed_bars": (
+                self.minimum_pre_confirm_completed_bars
+            ),
+            "minimum_post_confirm_completed_bars": (
+                self.minimum_post_confirm_completed_bars
+            ),
+            "generated_warmup_bars": self.generated_warmup_bars,
+            "generated_post_confirm_bars": self.generated_post_confirm_bars,
+            "maximum_atr_period": self.maximum_atr_period,
+            "maximum_outcome_horizon_bars": (
+                self.maximum_outcome_horizon_bars
+            ),
+            "all_bars_must_be_complete": self.all_bars_must_be_complete,
+            "no_external_data": self.no_external_data,
+        }
+
+    @classmethod
+    def from_dict(
+        cls, payload: Mapping[str, Any]
+    ) -> SyntheticDatasetCapacityPolicy:
+        data = _exact(
+            payload,
+            cls.__name__,
+            {item.name for item in fields(cls)} - {"schema_version"},
+        )
+        try:
+            return cls(
+                data["minimum_pre_confirm_completed_bars"],
+                data["minimum_post_confirm_completed_bars"],
+                data["generated_warmup_bars"],
+                data["generated_post_confirm_bars"],
+                data["maximum_atr_period"],
+                data["maximum_outcome_horizon_bars"],
+                data["all_bars_must_be_complete"],
+                data["no_external_data"],
+                data["schema_version"],
+            )
+        except (AttributeError, KeyError, TypeError, ValueError) as exc:
+            raise ExperimentSerializationError(
+                f"invalid serialized {cls.__name__}"
+            ) from exc
+
+
+@dataclass(frozen=True, slots=True)
 class ExperimentDatasetManifest:
     dataset_manifest_id: str
     cases: tuple[ExperimentDatasetCase, ...]
+    capacity_policy: SyntheticDatasetCapacityPolicy
     scenario_order: tuple[SyntheticScenarioKind, ...]
     partition_order: tuple[DatasetPartition, ...]
     seed_partition_rules: tuple[str, ...]
@@ -943,6 +1023,55 @@ class ExperimentDatasetManifest:
             raise ExperimentDatasetError(
                 "source input digests must be unique"
             )
+        _roundtrip(
+            self.capacity_policy,
+            SyntheticDatasetCapacityPolicy,
+            "capacity_policy",
+            ExperimentDatasetError,
+        )
+        for case in self.cases:
+            bars = case.source_input.reference_price_data.bars
+            activation_times = tuple(
+                item.event_confirm_time
+                for item in case.source_input.lifecycle_history.events
+                if item.event_type is LifecycleEventType.ACTIVATED
+            )
+            if not activation_times:
+                raise ExperimentDatasetError(
+                    "every case requires a formal activation ConfirmTime"
+                )
+            earliest_confirm_time = min(activation_times)
+            pre_confirm = sum(
+                item.is_complete
+                and item.available_time <= earliest_confirm_time
+                for item in bars
+            )
+            post_confirm = sum(
+                item.is_complete
+                and item.available_time > earliest_confirm_time
+                for item in bars
+            )
+            if (
+                len(bars)
+                < self.capacity_policy.generated_warmup_bars
+                + self.capacity_policy.generated_post_confirm_bars
+                or pre_confirm
+                < self.capacity_policy.generated_warmup_bars
+                or post_confirm
+                < self.capacity_policy.generated_post_confirm_bars
+                or pre_confirm
+                < self.capacity_policy.minimum_pre_confirm_completed_bars
+                or post_confirm
+                < self.capacity_policy.minimum_post_confirm_completed_bars
+                or any(not item.is_complete for item in bars)
+                or any(
+                    current.timestamp <= previous.timestamp
+                    for previous, current in zip(bars, bars[1:])
+                )
+            ):
+                raise ExperimentDatasetError(
+                    "case does not satisfy the frozen time-capacity policy"
+                )
         if self.scenario_order != tuple(SyntheticScenarioKind):
             raise ExperimentDatasetError("invalid scenario order")
         if self.partition_order != (
@@ -997,6 +1126,7 @@ class ExperimentDatasetManifest:
             "schema_version": self.schema_version,
             "dataset_manifest_id": self.dataset_manifest_id,
             "cases": [item.to_dict() for item in self.cases],
+            "capacity_policy": self.capacity_policy.to_dict(),
             "scenario_order": [item.value for item in self.scenario_order],
             "partition_order": [item.value for item in self.partition_order],
             "seed_partition_rules": list(self.seed_partition_rules),
@@ -1019,6 +1149,9 @@ class ExperimentDatasetManifest:
                 tuple(
                     ExperimentDatasetCase.from_dict(item)
                     for item in _ordered(data, cls.__name__, "cases")
+                ),
+                SyntheticDatasetCapacityPolicy.from_dict(
+                    data["capacity_policy"]
                 ),
                 tuple(
                     SyntheticScenarioKind(item)
@@ -1157,6 +1290,7 @@ class ExperimentPlan:
     experiment_plan_id: str
     baseline_id: str
     dataset_manifest_id: str
+    dataset_capacity_policy: SyntheticDatasetCapacityPolicy
     axes: tuple[ExperimentParameterAxis, ...]
     variants: tuple[ExperimentVariant, ...]
     ablations: tuple[ExperimentAblation, ...]
@@ -1190,6 +1324,12 @@ class ExperimentPlan:
             "dataset_manifest_id",
         ):
             _text(getattr(self, field), field, ExperimentPlanError)
+        _roundtrip(
+            self.dataset_capacity_policy,
+            SyntheticDatasetCapacityPolicy,
+            "dataset_capacity_policy",
+            ExperimentPlanError,
+        )
         if (
             not isinstance(self.axes, tuple)
             or len(self.axes) != 8
@@ -1365,6 +1505,7 @@ class ExperimentPlan:
             "experiment_plan_id": self.experiment_plan_id,
             "baseline_id": self.baseline_id,
             "dataset_manifest_id": self.dataset_manifest_id,
+            "dataset_capacity_policy": self.dataset_capacity_policy.to_dict(),
             "axes": [item.to_dict() for item in self.axes],
             "variants": [item.to_dict() for item in self.variants],
             "ablations": [item.to_dict() for item in self.ablations],
@@ -1399,6 +1540,9 @@ class ExperimentPlan:
                 data["experiment_plan_id"],
                 data["baseline_id"],
                 data["dataset_manifest_id"],
+                SyntheticDatasetCapacityPolicy.from_dict(
+                    data["dataset_capacity_policy"]
+                ),
                 tuple(
                     ExperimentParameterAxis.from_dict(item)
                     for item in _ordered(data, cls.__name__, "axes")
@@ -1523,6 +1667,7 @@ class ProtectedSourceManifest:
     protected_source_manifest_id: str
     execution_base_commit: str
     core_reference_commit: str
+    byte_policy: str
     files: tuple[ProtectedSourceFile, ...]
     schema_version: int = SCHEMA_VERSION
 
@@ -1550,6 +1695,10 @@ class ProtectedSourceManifest:
         ):
             raise ExperimentProtectedSourceError(
                 "protected source commit authority mismatch"
+            )
+        if self.byte_policy != PROTECTED_SOURCE_BYTE_POLICY:
+            raise ExperimentProtectedSourceError(
+                "protected source byte policy must require canonical LF bytes"
             )
         if (
             not isinstance(self.files, tuple)
@@ -1588,6 +1737,7 @@ class ProtectedSourceManifest:
             ),
             "execution_base_commit": self.execution_base_commit,
             "core_reference_commit": self.core_reference_commit,
+            "byte_policy": self.byte_policy,
             "files": [item.to_dict() for item in self.files],
         }
 
@@ -1605,6 +1755,7 @@ class ProtectedSourceManifest:
                 data["protected_source_manifest_id"],
                 data["execution_base_commit"],
                 data["core_reference_commit"],
+                data["byte_policy"],
                 tuple(
                     ProtectedSourceFile.from_dict(item)
                     for item in _ordered(data, cls.__name__, "files")

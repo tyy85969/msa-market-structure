@@ -1,2 +1,9 @@
 docs/reference/*.json text eol=lf
 docs/validation/evidence/*.json text eol=lf
+src/python/msa/reference/** text eol=lf
+src/python/msa/research/** text eol=lf
+src/python/msa/validation/metrics/** text eol=lf
+src/python/msa/validation/causal_audit.py text eol=lf
+src/python/msa/validation/comparison.py text eol=lf
+src/python/msa/validation/contracts.py text eol=lf
+src/python/msa/validation/metric_registry.py text eol=lf

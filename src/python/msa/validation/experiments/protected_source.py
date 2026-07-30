@@ -8,6 +8,7 @@ from pathlib import Path
 from .contracts import (
     CORE_REFERENCE_COMMIT,
     EXECUTION_BASE_COMMIT,
+    PROTECTED_SOURCE_BYTE_POLICY,
     ProtectedSourceFile,
     ProtectedSourceManifest,
 )
@@ -85,6 +86,10 @@ def _protected_paths(root: Path) -> tuple[Path, ...]:
 def _entry(root: Path, path: Path) -> ProtectedSourceFile:
     data = path.read_bytes()
     relative = path.relative_to(root).as_posix()
+    if b"\r" in data:
+        raise ExperimentProtectedSourceError(
+            f"protected source must use canonical LF worktree bytes: {relative}"
+        )
     return ProtectedSourceFile(
         relative_path=relative,
         byte_size=len(data),
@@ -114,6 +119,7 @@ def build_protected_source_manifest(
     payload = {
         "execution_base_commit": EXECUTION_BASE_COMMIT,
         "core_reference_commit": CORE_REFERENCE_COMMIT,
+        "byte_policy": PROTECTED_SOURCE_BYTE_POLICY,
         "files": [item.to_dict() for item in files],
         "schema_version": 1,
     }
@@ -123,6 +129,7 @@ def build_protected_source_manifest(
         ),
         execution_base_commit=EXECUTION_BASE_COMMIT,
         core_reference_commit=CORE_REFERENCE_COMMIT,
+        byte_policy=PROTECTED_SOURCE_BYTE_POLICY,
         files=files,
     )
 
