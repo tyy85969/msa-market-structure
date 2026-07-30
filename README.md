@@ -72,6 +72,22 @@ to the generic Core contracts, modify any algorithm, optimize parameters, or
 make a profitability claim. The authority and change-control boundary is
 documented in `docs/reference/core_alpha_v1_baseline.md`.
 
+## C-008C experiment authority
+
+The `msa.validation.experiments` boundary freezes the pre-outcome C-008C
+baseline, twenty deterministic synthetic dataset cases and partitions, eight
+OAT sensitivity axes, supported and unsupported ablations, the five-step
+increment ladder, twenty-seven hard-gate definitions, protected-source
+manifest, and canonical evidence. Source-bound validators reject fully
+re-signed deviations. A frozen Dataset Capacity Policy requires 32 pre-confirm
+and 64 post-confirm complete H1 bars per case, covering ATR 20 and horizon 24.
+Typed Gate Policies also freeze all 520 execution pairs, 20 Baseline and 125
+Variant replay samples, every-causal-AsOf cutoff scope, OOS coverage minima,
+and ten degeneration rules. Protected source uses raw LF worktree bytes under
+repository attributes and rejects CRLF without repair. It executes no
+experiment outcome, performs no parameter optimization, and adds no trading
+behavior. See `docs/validation/c008c_experiment_authority.md`.
+
 ## 近期里程碑
 
 1. **Phase 0 — Repository Bootstrap**：固化项目规则、架构、决策、假设与验证规范
