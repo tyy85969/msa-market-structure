@@ -88,6 +88,20 @@ repository attributes and rejects CRLF without repair. It executes no
 experiment outcome, performs no parameter optimization, and adds no trading
 behavior. See `docs/validation/c008c_experiment_authority.md`.
 
+## C-008C-B DEV/VALIDATION execution
+
+The `msa.validation.experiments.execution` boundary consumes the frozen
+C-008C-A authority and predeclares an outcome-free 390-pair
+DEVELOPMENT/VALIDATION schedule while quarantining all 130 seed-3 OOS pairs.
+It executes the exact public Core, causal audit, metric source binding,
+Decimal-context repeat, 125 Variant replay samples, partial Baseline replay,
+partial fixed-cutoff scope, descriptive same-case deltas, ten-rule Validation
+degeneration audit, and all twenty-seven frozen gates. Compact evidence stores
+complete public payload digests rather than duplicating internal Runs, and the
+full verifier re-executes the entire B scope. The report has no winner,
+leaderboard, parameter recommendation, profitability, or trading fields. See
+`docs/validation/c008c_b_dev_validation_execution.md`.
+
 ## 近期里程碑
 
 1. **Phase 0 — Repository Bootstrap**：固化项目规则、架构、决策、假设与验证规范
