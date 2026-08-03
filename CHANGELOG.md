@@ -4,6 +4,10 @@
 
 ## [Unreleased]
 
+- Added bounded, source-bound C-008C-B root-cause diagnostics that independently
+  test same-context and altered-Decimal behavior, attribute selected fixed-cutoff
+  differences by component, and separate direct degeneration evidence from
+  global Baseline propagation without changing frozen B evidence or Gates.
 - Added a strict lightweight C-008C-B existing-evidence integrity check that
   remains distinct from the full source-bound re-execution verifier.
 

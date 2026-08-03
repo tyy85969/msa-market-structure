@@ -109,6 +109,19 @@ quarantine, derived evidence, and canonical bytes without executing the Core.
 The separate `--check` mode retains the expensive full source-bound
 re-execution semantics.
 
+## C-008C-B root-cause diagnostics
+
+The `msa.validation.experiments.execution.rca` boundary freezes a bounded
+40-pair diagnostic schedule before execution, separates ordinary same-context
+repeat from precision-7 `ROUND_FLOOR` perturbation, attributes fifteen selected
+fixed-cutoff checkpoints by source/frame/ledger/metric layer, and distinguishes
+Variant-direct degeneration evidence from global Baseline propagation. Its
+canonical evidence is diagnostic only: it does not modify the original B
+evidence, recalculate Gates, change `BLOCKED_BEFORE_OOS`, or execute OOS.
+`generate_c008c_b_rca.py --check-existing` validates the committed RCA without
+re-executing diagnostics. See
+`docs/validation/c008c_b_root_cause_analysis.md`.
+
 ## 近期里程碑
 
 1. **Phase 0 — Repository Bootstrap**：固化项目规则、架构、决策、假设与验证规范
