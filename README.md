@@ -102,6 +102,13 @@ full verifier re-executes the entire B scope. The report has no winner,
 leaderboard, parameter recommendation, profitability, or trading fields. See
 `docs/validation/c008c_b_dev_validation_execution.md`.
 
+For recovery and routine integrity checks,
+`generate_c008c_b_results.py --check-existing` validates the committed
+Authority, protected-source bytes, B contracts, identities, schedules, OOS
+quarantine, derived evidence, and canonical bytes without executing the Core.
+The separate `--check` mode retains the expensive full source-bound
+re-execution semantics.
+
 ## 近期里程碑
 
 1. **Phase 0 — Repository Bootstrap**：固化项目规则、架构、决策、假设与验证规范

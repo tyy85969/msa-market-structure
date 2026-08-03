@@ -4,6 +4,9 @@
 
 ## [Unreleased]
 
+- Added a strict lightweight C-008C-B existing-evidence integrity check that
+  remains distinct from the full source-bound re-execution verifier.
+
 ### Phase 0 / Engineering Foundation
 - Added repository governance and contribution rules.
 - Added architecture documentation and a six-record ADR framework.

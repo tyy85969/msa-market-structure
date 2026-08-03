@@ -43,6 +43,7 @@ from .errors import (
     C008CBReportError,
 )
 from .evidence import (
+    check_existing_c008c_b_evidence,
     verify_c008c_b_report,
     write_c008c_b_evidence,
 )
@@ -98,6 +99,7 @@ __all__ = [
     "MetricDeltaStatus",
     "ReplayComparisonStatus",
     "build_c008c_b_execution_manifest",
+    "check_existing_c008c_b_evidence",
     "load_c008c_b_authority",
     "run_c008c_b_dev_validation",
     "validate_c008c_b_execution_manifest",

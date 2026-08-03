@@ -225,9 +225,49 @@ consistency, schedule coverage, and frozen-authority binding.
 their Decimal-context repeats, replay, fixed-cutoff, deltas, degeneration, and
 gates, then compares the complete `C008CBRunReport.to_dict()`.
 
-`python -B tools/validation/generate_c008c_b_results.py --check` performs that
-source-bound execution and byte-compares the committed evidence without
-modifying it.
+The two checking modes deliberately have different semantics:
+
+- `python -B tools/validation/generate_c008c_b_results.py --check-existing`
+  performs the C-008C-A Authority and committed Protected Source preflight,
+  strictly reconstructs every nested B contract and semantic identity,
+  validates the frozen schedules and OOS quarantine, recomputes only derived
+  deltas, degeneration summaries, partition summaries and GateResults from the
+  stored evidence, and checks canonical bytes and SHA-256. It does not execute
+  the Core, Replay, fixed-cutoff cases, or the full source-bound verifier.
+- `python -B tools/validation/generate_c008c_b_results.py --check` performs
+  the complete expensive source-bound re-execution and byte-compares the
+  committed evidence without modifying it.
+
+The lightweight mode is an existing-evidence integrity check. It must not be
+reported as independent Core re-execution or full source-bound reproduction,
+and it does not weaken the formal semantics of `verify_c008c_b_report`.
+
+## Formal B-stage result
+
+The completed canonical evidence records:
+
+- Execution Manifest ID:
+  `c008c-b-execution-manifest-v1-c113e9b5be160fd293a533a3f3eb115e606870b814b50a8029bb0f99788d1836`;
+- Run Report ID:
+  `c008c-b-run-report-v1-2d52678c4633e646e99bb0eac192f53158bbedae4b87e7a72c012acc28f46d79`;
+- 390/390 B execution pairs, split into 260 DEVELOPMENT and 130 VALIDATION;
+- 130/130 seed-3 OOS pairs deferred, with zero OOS Core or Metric outcomes;
+- 390 passed CaseResults and zero pipeline, audit, metric, or metric
+  source-binding failures;
+- 390 Decimal-context determinism mismatches out of 390 comparisons;
+- 140 replay matches out of 140 comparisons;
+- fifteen fixed-cutoff comparisons, of which six are stable and nine detect
+  330 total rewrites;
+- twenty-five `DEGENERATED`, zero `SENSITIVE`, and zero `NOT_DEGENERATED`
+  non-Baseline Variants;
+- sixteen PASS, four `PARTIAL_PASS_DEFERRED_OOS`, three
+  `DEFERRED_TO_C008C_C`, and four FAIL GateResults.
+
+The failing gates are `FIXED_CUTOFF_STABILITY`, `DETERMINISTIC_REPEAT`,
+`DECIMAL_CONTEXT_INDEPENDENCE`, and `NO_NEIGHBORHOOD_DEGENERATION`. The formal
+stage status is therefore `BLOCKED_BEFORE_OOS`, not
+`READY_FOR_LOCKED_OOS`. No configuration, threshold, Dataset, protected
+implementation, or stored outcome was changed in response to these results.
 
 ## Limitations and later boundaries
 
