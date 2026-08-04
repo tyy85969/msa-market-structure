@@ -11,6 +11,7 @@ from typing import Any, Mapping
 from msa.domain import BoundarySide, LifecycleState, PriceRange, ProvenanceRef
 
 from .contracts import ResonanceEvidence, ResonanceEvidenceTier, ResonanceFrame, ResonanceFrameHistory
+from .decimal_arithmetic import canonical_decimal_boundary
 from .errors import (
     ResonanceScoringConfigurationError,
     ResonanceScoringEngineError,
@@ -144,6 +145,7 @@ class ResonanceScorer:
                 f"invalid serialized {cls.__name__}: {exc}"
             ) from exc
 
+    @canonical_decimal_boundary
     def score_frame(self, frame: ResonanceFrame) -> ResonanceScoreFrame:
         self._validate_frame(frame)
         tolerance = self.config.effective_tolerance(frame.reference_price.price)

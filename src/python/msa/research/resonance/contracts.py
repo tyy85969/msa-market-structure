@@ -33,6 +33,7 @@ from msa.domain import (
 from msa.research.lifecycle import LifecycleHistory
 from msa.research.timeframe_state import TimeframeStateHistory
 
+from .decimal_arithmetic import canonical_decimal_boundary
 from .errors import (
     ResonanceFrameConfigurationError,
     ResonanceFrameEngineError,
@@ -175,6 +176,7 @@ def _parse_optional_time(field_name: str, value: object) -> datetime | None:
     return None if value is None else _parse_time(field_name, value)
 
 
+@canonical_decimal_boundary
 def _elapsed_seconds(delta: timedelta) -> Decimal:
     total_microseconds = (
         delta.days * 86_400_000_000

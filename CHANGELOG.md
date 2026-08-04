@@ -4,6 +4,10 @@
 
 ## [Unreleased]
 
+- Isolated all formal Resonance scoring and contract recomputation inside a
+  fully specified precision-28 `ROUND_HALF_EVEN` Decimal arithmetic authority,
+  with versioned C-008C-H2 remediation evidence and no parameter, threshold,
+  formula, selection-policy, historical-Evidence, B-v2, or OOS change.
 - Added bounded, source-bound C-008C-B root-cause diagnostics that independently
   test same-context and altered-Decimal behavior, attribute selected fixed-cutoff
   differences by component, and separate direct degeneration evidence from
