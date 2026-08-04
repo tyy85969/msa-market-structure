@@ -76,6 +76,24 @@ class DifferenceKind(_RCAEnum):
     ORDER = "ORDER"
 
 
+class DiagnosticLayer(_RCAEnum):
+    CONFIG = "CONFIG"
+    CORE = "CORE"
+    AUDIT = "AUDIT"
+    METRIC = "METRIC"
+    CASE_RESULT = "CASE_RESULT"
+
+
+class RootCauseSubject(_RCAEnum):
+    DETERMINISM_GATE_CONFLATION = "DETERMINISM_GATE_CONFLATION"
+    DEGENERATION_GLOBAL_PROPAGATION = "DEGENERATION_GLOBAL_PROPAGATION"
+    CORE_DECIMAL_CONTEXT_DEPENDENCE = "CORE_DECIMAL_CONTEXT_DEPENDENCE"
+    METRIC_FIXED_CUTOFF_SEMANTICS = "METRIC_FIXED_CUTOFF_SEMANTICS"
+    SAME_CONTEXT_NONDETERMINISM = "SAME_CONTEXT_NONDETERMINISM"
+    FRAME_OR_LEDGER_FUTURE_REWRITE = "FRAME_OR_LEDGER_FUTURE_REWRITE"
+    PREFIX_HARNESS_ERROR = "PREFIX_HARNESS_ERROR"
+
+
 def _serialize(value: object) -> object:
     if isinstance(value, float):
         raise C008CBRCAError("RCA evidence must not contain float")
@@ -330,6 +348,51 @@ class PayloadDifference(_StrictContract):
 
 
 @dataclass(frozen=True, slots=True)
+class LayerDifferenceSummary(_StrictContract):
+    layer_difference_summary_id: str
+    layer: DiagnosticLayer
+    semantic_difference_count: int
+    identity_difference_count: int
+    first_semantic_difference_path: str | None
+    first_identity_difference_path: str | None
+    first_semantic_left_subtree_digest: str | None
+    first_semantic_right_subtree_digest: str | None
+    first_identity_left_subtree_digest: str | None
+    first_identity_right_subtree_digest: str | None
+    schema_version: int = SCHEMA_VERSION
+
+    _ID_FIELD = "layer_difference_summary_id"
+    _PREFIX = "c008c-b-rca-layer-difference-v1-"
+
+    def __post_init__(self) -> None:
+        semantic_fields = (
+            self.first_semantic_difference_path,
+            self.first_semantic_left_subtree_digest,
+            self.first_semantic_right_subtree_digest,
+        )
+        identity_fields = (
+            self.first_identity_difference_path,
+            self.first_identity_left_subtree_digest,
+            self.first_identity_right_subtree_digest,
+        )
+        if (self.semantic_difference_count == 0) != all(
+            value is None for value in semantic_fields
+        ):
+            raise C008CBRCAError("semantic first-difference fields are inconsistent")
+        if (self.identity_difference_count == 0) != all(
+            value is None for value in identity_fields
+        ):
+            raise C008CBRCAError("identity first-difference fields are inconsistent")
+        for value in (*semantic_fields[1:], *identity_fields[1:]):
+            if value is not None and (
+                len(value) != 64
+                or any(character not in "0123456789abcdef" for character in value)
+            ):
+                raise C008CBRCAError("layer subtree digest must be lowercase SHA-256")
+        self._validate()
+
+
+@dataclass(frozen=True, slots=True)
 class DeterminismDiagnosticResult(_StrictContract):
     diagnostic_result_id: str
     diagnostic_pair_id: str
@@ -342,6 +405,7 @@ class DeterminismDiagnosticResult(_StrictContract):
     full_payload_equal: bool
     total_difference_count: int
     differences: tuple[PayloadDifference, ...]
+    layer_summaries: tuple[LayerDifferenceSummary, ...]
     mismatch_layer: MismatchLayer
     first_semantic_difference_path: str | None
     core_semantic_mismatch: bool
@@ -362,6 +426,105 @@ class DeterminismDiagnosticResult(_StrictContract):
             raise C008CBRCAError("at most 20 differences may be stored")
         if self.total_difference_count < len(self.differences):
             raise C008CBRCAError("difference count is inconsistent")
+        if tuple(item.layer for item in self.layer_summaries) != tuple(
+            DiagnosticLayer
+        ):
+            raise C008CBRCAError("determinism result requires all ordered layer summaries")
+        by_layer = {item.layer: item for item in self.layer_summaries}
+        equality = {
+            DiagnosticLayer.CONFIG: self.config_payload_equal,
+            DiagnosticLayer.CORE: self.core_run_payload_equal,
+            DiagnosticLayer.AUDIT: self.audit_payload_equal,
+            DiagnosticLayer.METRIC: self.metric_payload_equal,
+            DiagnosticLayer.CASE_RESULT: self.case_result_payload_equal,
+        }
+        for layer, equal in equality.items():
+            summary = by_layer[layer]
+            if equal != (
+                summary.semantic_difference_count == 0
+                and summary.identity_difference_count == 0
+            ):
+                raise C008CBRCAError("layer equality contradicts difference summary")
+        expected_total = sum(
+            item.semantic_difference_count + item.identity_difference_count
+            for item in self.layer_summaries
+        )
+        if self.total_difference_count != expected_total:
+            raise C008CBRCAError("global difference count contradicts layer summaries")
+        if self.full_payload_equal != (expected_total == 0):
+            raise C008CBRCAError("full equality contradicts layer summaries")
+        core = by_layer[DiagnosticLayer.CORE]
+        audit = by_layer[DiagnosticLayer.AUDIT]
+        metric = by_layer[DiagnosticLayer.METRIC]
+        case = by_layer[DiagnosticLayer.CASE_RESULT]
+        expected_flags = (
+            core.semantic_difference_count > 0,
+            core.semantic_difference_count == 0 and core.identity_difference_count > 0,
+            audit.semantic_difference_count > 0,
+            audit.semantic_difference_count == 0 and audit.identity_difference_count > 0,
+            metric.semantic_difference_count > 0,
+            metric.semantic_difference_count == 0 and metric.identity_difference_count > 0,
+            (case.semantic_difference_count + case.identity_difference_count > 0)
+            and all(equality[layer] for layer in tuple(DiagnosticLayer)[:-1]),
+        )
+        actual_flags = (
+            self.core_semantic_mismatch,
+            self.core_identity_only_mismatch,
+            self.audit_semantic_mismatch,
+            self.audit_identity_or_provenance_mismatch,
+            self.metric_semantic_mismatch,
+            self.metric_identity_or_provenance_mismatch,
+            self.case_derived_only_mismatch,
+        )
+        if actual_flags != expected_flags:
+            raise C008CBRCAError("determinism flags contradict layer summaries")
+        first_semantic = next(
+            (
+                item.first_semantic_difference_path
+                for item in self.layer_summaries
+                if item.semantic_difference_count
+            ),
+            None,
+        )
+        if self.first_semantic_difference_path != first_semantic:
+            raise C008CBRCAError("first semantic path contradicts layer summaries")
+        expected_layer = MismatchLayer.NONE
+        config = by_layer[DiagnosticLayer.CONFIG]
+        if config.semantic_difference_count:
+            expected_layer = MismatchLayer.CONFIG_SNAPSHOT
+        elif core.semantic_difference_count:
+            expected_layer = MismatchLayer.CORE_RUN_SEMANTIC
+        elif core.identity_difference_count:
+            expected_layer = MismatchLayer.CORE_RUN_IDENTITY
+        elif audit.semantic_difference_count:
+            expected_layer = MismatchLayer.AUDIT_SEMANTIC
+        elif audit.identity_difference_count:
+            expected_layer = MismatchLayer.AUDIT_IDENTITY_OR_PROVENANCE
+        elif metric.semantic_difference_count:
+            expected_layer = MismatchLayer.METRIC_SEMANTIC
+        elif metric.identity_difference_count:
+            expected_layer = MismatchLayer.METRIC_IDENTITY_OR_PROVENANCE
+        elif case.semantic_difference_count or case.identity_difference_count:
+            expected_layer = MismatchLayer.CASE_RESULT_DERIVED
+        if self.mismatch_layer is not expected_layer:
+            raise C008CBRCAError("mismatch layer contradicts layer summaries")
+        protected_semantic = any(
+            by_layer[layer].semantic_difference_count
+            for layer in (
+                DiagnosticLayer.CORE,
+                DiagnosticLayer.AUDIT,
+                DiagnosticLayer.METRIC,
+            )
+        )
+        expected_disposition = (
+            RootCauseDisposition.NO_ROOT_CAUSE_FOUND
+            if expected_total == 0
+            else RootCauseDisposition.PROTECTED_CORE_REMEDIATION_REQUIRED
+            if protected_semantic
+            else RootCauseDisposition.HARNESS_CORRECTION_REQUIRED
+        )
+        if self.disposition is not expected_disposition:
+            raise C008CBRCAError("diagnostic disposition contradicts layer summaries")
         self._validate()
 
 
@@ -372,6 +535,9 @@ class FixedCutoffComponentResult(_StrictContract):
     equal: bool
     total_difference_count: int
     differences: tuple[PayloadDifference, ...]
+    first_difference_path: str | None
+    first_left_subtree_digest: str | None
+    first_right_subtree_digest: str | None
     schema_version: int = SCHEMA_VERSION
 
     _ID_FIELD = "component_result_id"
@@ -380,6 +546,24 @@ class FixedCutoffComponentResult(_StrictContract):
     def __post_init__(self) -> None:
         if len(self.differences) > 20:
             raise C008CBRCAError("at most 20 component differences may be stored")
+        if self.total_difference_count < len(self.differences):
+            raise C008CBRCAError("component difference count is inconsistent")
+        expected = self.differences[0] if self.differences else None
+        if self.equal != (self.total_difference_count == 0):
+            raise C008CBRCAError("component equality contradicts differences")
+        if self.total_difference_count and expected is None:
+            raise C008CBRCAError("component first difference was not retained")
+        expected_fields = (
+            None if expected is None else expected.path,
+            None if expected is None else expected.left_subtree_digest,
+            None if expected is None else expected.right_subtree_digest,
+        )
+        if (
+            self.first_difference_path,
+            self.first_left_subtree_digest,
+            self.first_right_subtree_digest,
+        ) != expected_fields:
+            raise C008CBRCAError("component first-difference fields are inconsistent")
         self._validate()
 
 
@@ -413,6 +597,57 @@ class FixedCutoffDiagnosticResult(_StrictContract):
     def __post_init__(self) -> None:
         if self.comparator_boundary_operator != "<":
             raise C008CBRCAError("comparator boundary must be recorded as <")
+        if tuple(item.component_name for item in self.components) != (
+            "processing_schedule",
+            "frame_bundles",
+            "active_box_events",
+            "frozen_boxes",
+            "metric_semantic",
+            "metric_full_payload",
+        ):
+            raise C008CBRCAError("cutoff diagnostic component schedule mismatch")
+        component = {item.component_name: item for item in self.components}
+        expected_flags = (
+            component["processing_schedule"].equal,
+            component["frame_bundles"].equal,
+            component["active_box_events"].equal,
+            component["frozen_boxes"].equal,
+            component["metric_semantic"].equal,
+            component["metric_full_payload"].equal,
+        )
+        actual_flags = (
+            self.processing_schedule_equal,
+            self.frame_bundles_equal,
+            self.active_box_events_equal,
+            self.frozen_boxes_equal,
+            self.metric_semantic_equal,
+            self.metric_full_payload_equal,
+        )
+        if actual_flags != expected_flags:
+            raise C008CBRCAError("cutoff flags contradict component results")
+        if self.identity_only_difference != (
+            self.metric_semantic_equal and not self.metric_full_payload_equal
+        ):
+            raise C008CBRCAError("cutoff identity-only flag is inconsistent")
+        expected_layer = (
+            CutoffRewriteLayer.PREFIX_SOURCE
+            if not self.source_prefix_valid
+            else CutoffRewriteLayer.PROCESSING_SCHEDULE
+            if not self.processing_schedule_equal
+            else CutoffRewriteLayer.FRAME_BUNDLE
+            if not self.frame_bundles_equal
+            else CutoffRewriteLayer.ACTIVE_BOX_LEDGER
+            if not self.active_box_events_equal or not self.frozen_boxes_equal
+            else CutoffRewriteLayer.METRIC_OUTCOME
+            if not self.metric_semantic_equal
+            else CutoffRewriteLayer.IDENTITY_OR_SOURCE_BINDING
+            if self.identity_only_difference
+            else CutoffRewriteLayer.COMPARISON_AUDIT
+            if not self.shared_asof_audit_passed or not self.prefix_audit_passed
+            else CutoffRewriteLayer.NONE
+        )
+        if self.final_layer is not expected_layer:
+            raise C008CBRCAError("cutoff final layer contradicts component evidence")
         self._validate()
 
 
@@ -422,6 +657,7 @@ class DegenerationRuleAttribution(_StrictContract):
     variant_id: str
     rule_code: str
     triggered: bool
+    finding_status: str
     evidence_kind: DegenerationEvidenceKind
     evidence_direct_subject: str
     evidence_source_ids: tuple[str, ...]
@@ -434,6 +670,49 @@ class DegenerationRuleAttribution(_StrictContract):
     _PREFIX = "c008c-b-rca-degeneration-rule-v1-"
 
     def __post_init__(self) -> None:
+        if self.finding_status not in (
+            "DEGENERATED",
+            "NOT_DEGENERATED",
+            "INSUFFICIENT_EVIDENCE",
+        ):
+            raise C008CBRCAError("invalid degeneration finding status")
+        if self.triggered != (self.finding_status == "DEGENERATED"):
+            raise C008CBRCAError("degeneration trigger/status mismatch")
+        expected = {
+            DegenerationEvidenceKind.VARIANT_DIRECT: (
+                self.variant_id,
+                True,
+                False,
+                False,
+            ),
+            DegenerationEvidenceKind.GLOBAL_BASELINE_PROPAGATION: (
+                "BASELINE_FIXED_CUTOFF_AGGREGATE",
+                False,
+                True,
+                True,
+            ),
+            DegenerationEvidenceKind.SHARED_STATIC_EVIDENCE: (
+                "FROZEN_EXECUTION_MANIFEST_CONFIG_AUTHORITY",
+                False,
+                False,
+                False,
+            ),
+            DegenerationEvidenceKind.INSUFFICIENT_EVIDENCE: (
+                "INSUFFICIENT_VARIANT_EVIDENCE",
+                False,
+                False,
+                False,
+            ),
+        }[self.evidence_kind]
+        if (
+            self.evidence_direct_subject,
+            self.variant_specific,
+            self.shared_baseline_evidence,
+            self.derived_from_failed_gate,
+        ) != expected:
+            raise C008CBRCAError("degeneration evidence flags contradict evidence kind")
+        if not self.evidence_source_ids:
+            raise C008CBRCAError("degeneration attribution requires source IDs")
         self._validate()
 
 
@@ -479,8 +758,13 @@ class C008CBRootCauseReport(_StrictContract):
     metric_semantic_rewrite_count: int
     identity_only_cutoff_difference_count: int
     harness_contract_mismatch_count: int
+    variant_direct_evidence_count: int
+    global_propagation_evidence_count: int
     direct_degeneration_rule_count: int
     global_baseline_propagation_count: int
+    shared_static_evidence_count: int
+    insufficient_evidence_count: int
+    root_cause_subjects: tuple[RootCauseSubject, ...]
     disposition: RootCauseDisposition
     admitted_attribution_gaps: tuple[str, ...]
     recommendations: tuple[str, ...]
@@ -514,14 +798,51 @@ class C008CBRootCauseReport(_StrictContract):
         )
         if any(forbidden):
             raise C008CBRCAError("RCA crossed a frozen task boundary")
+        if len(set(self.root_cause_subjects)) != len(self.root_cause_subjects):
+            raise C008CBRCAError("root cause subjects must be unique")
+        self._validate()
+
+
+@dataclass(frozen=True, slots=True)
+class C008CBRCAEvidenceLock(_StrictContract):
+    evidence_lock_id: str
+    rca_manifest_id: str
+    rca_manifest_sha256: str
+    root_cause_report_id: str
+    root_cause_report_sha256: str
+    analysis_sha256: str
+    b_execution_manifest_id: str
+    b_manifest_sha256: str
+    b_run_report_id: str
+    b_report_sha256: str
+    schema_version: int = SCHEMA_VERSION
+
+    _ID_FIELD = "evidence_lock_id"
+    _PREFIX = "c008c-b-rca-evidence-lock-v1-"
+
+    def __post_init__(self) -> None:
+        for field_name in (
+            "rca_manifest_sha256",
+            "root_cause_report_sha256",
+            "analysis_sha256",
+            "b_manifest_sha256",
+            "b_report_sha256",
+        ):
+            value = getattr(self, field_name)
+            if len(value) != 64 or any(
+                character not in "0123456789abcdef" for character in value
+            ):
+                raise C008CBRCAError(f"{field_name} must be lowercase SHA-256")
         self._validate()
 
 
 __all__ = [
+    "C008CBRCAEvidenceLock",
     "C008CBRCADiagnosticPair",
     "C008CBRCAManifest",
     "C008CBRootCauseReport",
     "CutoffRewriteLayer",
+    "DiagnosticLayer",
     "DegenerationEvidenceKind",
     "DegenerationRuleAttribution",
     "DeterminismDiagnosticKind",
@@ -529,8 +850,10 @@ __all__ = [
     "DifferenceKind",
     "FixedCutoffComponentResult",
     "FixedCutoffDiagnosticResult",
+    "LayerDifferenceSummary",
     "MismatchLayer",
     "PayloadDifference",
     "RootCauseDisposition",
+    "RootCauseSubject",
     "VariantDegenerationAttribution",
 ]

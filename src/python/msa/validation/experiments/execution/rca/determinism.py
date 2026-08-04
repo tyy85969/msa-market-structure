@@ -11,28 +11,22 @@ from ..manifest import load_c008c_b_authority
 from ..runner import _execute_pair
 from .contracts import (
     C008CBRCAManifest,
+    DiagnosticLayer,
     DeterminismDiagnosticKind,
     DeterminismDiagnosticResult,
+    LayerDifferenceSummary,
     MismatchLayer,
     RootCauseDisposition,
 )
 from .manifest import load_b_sources, validate_c008c_b_rca_manifest
 from .payload_diff import payload_differences
-
-
-_IDENTITY_TOKENS = ("_id", "digest", "provenance", "source_run_id")
-
-
-def _semantic(value: object) -> object:
-    if isinstance(value, dict):
-        return {
-            key: _semantic(item)
-            for key, item in value.items()
-            if not any(token in key for token in _IDENTITY_TOKENS)
-        }
-    if isinstance(value, list):
-        return [_semantic(item) for item in value]
-    return value
+from .projections import (
+    ExplicitProjection,
+    split_audit_projection,
+    split_case_result_projection,
+    split_core_run_projection,
+    split_metric_projection,
+)
 
 
 def _payload(artifact: object, config: object) -> dict[str, object]:
@@ -41,101 +35,189 @@ def _payload(artifact: object, config: object) -> dict[str, object]:
         "core_run": None if artifact.run is None else artifact.run.to_dict(),
         "audit": None if artifact.audit is None else artifact.audit.to_dict(),
         "metric": (
-            None if artifact.metric_report is None else artifact.metric_report.to_dict()
+            None
+            if artifact.metric_report is None
+            else artifact.metric_report.to_dict()
         ),
         "case_result": artifact.result.to_dict(),
     }
 
 
-def _classify(left: dict[str, object], right: dict[str, object]) -> tuple:
-    equality = {key: left[key] == right[key] for key in left}
-    core_semantic = _semantic(left["core_run"]) != _semantic(right["core_run"])
-    audit_semantic = _semantic(left["audit"]) != _semantic(right["audit"])
-    metric_semantic = _semantic(left["metric"]) != _semantic(right["metric"])
-    core_identity = not equality["core_run"] and not core_semantic
-    audit_identity = not equality["audit"] and not audit_semantic
-    metric_identity = not equality["metric"] and not metric_semantic
-    case_only = (
-        not equality["case_result"]
-        and all(equality[key] for key in ("config", "core_run", "audit", "metric"))
+def _summary(
+    layer: DiagnosticLayer,
+    left: ExplicitProjection,
+    right: ExplicitProjection,
+) -> LayerDifferenceSummary:
+    semantic_count, semantic_differences = payload_differences(
+        left.semantic, right.semantic, max_stored=1
     )
-    layer = MismatchLayer.NONE
-    if not equality["config"]:
-        layer = MismatchLayer.CONFIG_SNAPSHOT
-    elif core_semantic:
-        layer = MismatchLayer.CORE_RUN_SEMANTIC
-    elif core_identity:
-        layer = MismatchLayer.CORE_RUN_IDENTITY
-    elif audit_semantic:
-        layer = MismatchLayer.AUDIT_SEMANTIC
-    elif audit_identity:
-        layer = MismatchLayer.AUDIT_IDENTITY_OR_PROVENANCE
-    elif metric_semantic:
-        layer = MismatchLayer.METRIC_SEMANTIC
-    elif metric_identity:
-        layer = MismatchLayer.METRIC_IDENTITY_OR_PROVENANCE
-    elif case_only:
-        layer = MismatchLayer.CASE_RESULT_DERIVED
-    elif not all(equality.values()):
-        layer = MismatchLayer.UNKNOWN
-    return (
-        equality,
-        layer,
-        core_semantic,
-        core_identity,
-        audit_semantic,
-        audit_identity,
-        metric_semantic,
-        metric_identity,
-        case_only,
+    identity_count, identity_differences = payload_differences(
+        left.identity, right.identity, max_stored=1
     )
-
-
-def _result(pair_id: str, kind: DeterminismDiagnosticKind, left: dict, right: dict):
-    total, differences = payload_differences(left, right)
-    classified = _classify(left, right)
-    equality, layer, *flags = classified
-    semantic_path = next(
-        (
-            item.path
-            for item in differences
-            if not any(token in item.path.lower() for token in _IDENTITY_TOKENS)
+    semantic = semantic_differences[0] if semantic_differences else None
+    identity = identity_differences[0] if identity_differences else None
+    kwargs = {
+        "layer": layer,
+        "semantic_difference_count": semantic_count,
+        "identity_difference_count": identity_count,
+        "first_semantic_difference_path": (
+            None if semantic is None else semantic.path
         ),
-        None,
+        "first_identity_difference_path": (
+            None if identity is None else identity.path
+        ),
+        "first_semantic_left_subtree_digest": (
+            None if semantic is None else semantic.left_subtree_digest
+        ),
+        "first_semantic_right_subtree_digest": (
+            None if semantic is None else semantic.right_subtree_digest
+        ),
+        "first_identity_left_subtree_digest": (
+            None if identity is None else identity.left_subtree_digest
+        ),
+        "first_identity_right_subtree_digest": (
+            None if identity is None else identity.right_subtree_digest
+        ),
+        "schema_version": 1,
+    }
+    payload = {
+        **kwargs,
+        "layer": layer.value,
+    }
+    return LayerDifferenceSummary(
+        layer_difference_summary_id=semantic_id(
+            LayerDifferenceSummary._PREFIX, payload
+        ),
+        **kwargs,
+    )
+
+
+def _layer_projections(payload: dict[str, object]) -> tuple[ExplicitProjection, ...]:
+    return (
+        ExplicitProjection(semantic=payload["config"], identity={}),
+        split_core_run_projection(payload["core_run"]),
+        split_audit_projection(payload["audit"]),
+        split_metric_projection(payload["metric"]),
+        split_case_result_projection(payload["case_result"]),
+    )
+
+
+def build_determinism_result(
+    pair_id: str,
+    kind: DeterminismDiagnosticKind,
+    left: dict[str, object],
+    right: dict[str, object],
+) -> DeterminismDiagnosticResult:
+    """Build a source-derived diagnostic with independent per-layer summaries."""
+
+    left_layers = _layer_projections(left)
+    right_layers = _layer_projections(right)
+    summaries = tuple(
+        _summary(layer, left_item, right_item)
+        for layer, left_item, right_item in zip(
+            DiagnosticLayer, left_layers, right_layers, strict=True
+        )
+    )
+    by_layer = {item.layer: item for item in summaries}
+    _, differences = payload_differences(left, right)
+    total = sum(
+        item.semantic_difference_count + item.identity_difference_count
+        for item in summaries
+    )
+    equality = {
+        layer: summary.semantic_difference_count == 0
+        and summary.identity_difference_count == 0
+        for layer, summary in by_layer.items()
+    }
+    core = by_layer[DiagnosticLayer.CORE]
+    audit = by_layer[DiagnosticLayer.AUDIT]
+    metric = by_layer[DiagnosticLayer.METRIC]
+    case = by_layer[DiagnosticLayer.CASE_RESULT]
+    layer = MismatchLayer.NONE
+    if by_layer[DiagnosticLayer.CONFIG].semantic_difference_count:
+        layer = MismatchLayer.CONFIG_SNAPSHOT
+    elif core.semantic_difference_count:
+        layer = MismatchLayer.CORE_RUN_SEMANTIC
+    elif core.identity_difference_count:
+        layer = MismatchLayer.CORE_RUN_IDENTITY
+    elif audit.semantic_difference_count:
+        layer = MismatchLayer.AUDIT_SEMANTIC
+    elif audit.identity_difference_count:
+        layer = MismatchLayer.AUDIT_IDENTITY_OR_PROVENANCE
+    elif metric.semantic_difference_count:
+        layer = MismatchLayer.METRIC_SEMANTIC
+    elif metric.identity_difference_count:
+        layer = MismatchLayer.METRIC_IDENTITY_OR_PROVENANCE
+    elif case.semantic_difference_count or case.identity_difference_count:
+        layer = MismatchLayer.CASE_RESULT_DERIVED
+    protected_semantic = any(
+        by_layer[item].semantic_difference_count
+        for item in (
+            DiagnosticLayer.CORE,
+            DiagnosticLayer.AUDIT,
+            DiagnosticLayer.METRIC,
+        )
     )
     disposition = (
         RootCauseDisposition.NO_ROOT_CAUSE_FOUND
         if total == 0
         else RootCauseDisposition.PROTECTED_CORE_REMEDIATION_REQUIRED
-        if flags[0]
+        if protected_semantic
         else RootCauseDisposition.HARNESS_CORRECTION_REQUIRED
+    )
+    first_semantic = next(
+        (
+            item.first_semantic_difference_path
+            for item in summaries
+            if item.semantic_difference_count
+        ),
+        None,
     )
     kwargs = {
         "diagnostic_pair_id": pair_id,
         "diagnostic_kind": kind,
-        "config_payload_equal": equality["config"],
-        "core_run_payload_equal": equality["core_run"],
-        "audit_payload_equal": equality["audit"],
-        "metric_payload_equal": equality["metric"],
-        "case_result_payload_equal": equality["case_result"],
+        "config_payload_equal": equality[DiagnosticLayer.CONFIG],
+        "core_run_payload_equal": equality[DiagnosticLayer.CORE],
+        "audit_payload_equal": equality[DiagnosticLayer.AUDIT],
+        "metric_payload_equal": equality[DiagnosticLayer.METRIC],
+        "case_result_payload_equal": equality[DiagnosticLayer.CASE_RESULT],
         "full_payload_equal": total == 0,
         "total_difference_count": total,
         "differences": differences,
+        "layer_summaries": summaries,
         "mismatch_layer": layer,
-        "first_semantic_difference_path": semantic_path,
-        "core_semantic_mismatch": flags[0],
-        "core_identity_only_mismatch": flags[1],
-        "audit_semantic_mismatch": flags[2],
-        "audit_identity_or_provenance_mismatch": flags[3],
-        "metric_semantic_mismatch": flags[4],
-        "metric_identity_or_provenance_mismatch": flags[5],
-        "case_derived_only_mismatch": flags[6],
+        "first_semantic_difference_path": first_semantic,
+        "core_semantic_mismatch": core.semantic_difference_count > 0,
+        "core_identity_only_mismatch": (
+            core.semantic_difference_count == 0
+            and core.identity_difference_count > 0
+        ),
+        "audit_semantic_mismatch": audit.semantic_difference_count > 0,
+        "audit_identity_or_provenance_mismatch": (
+            audit.semantic_difference_count == 0
+            and audit.identity_difference_count > 0
+        ),
+        "metric_semantic_mismatch": metric.semantic_difference_count > 0,
+        "metric_identity_or_provenance_mismatch": (
+            metric.semantic_difference_count == 0
+            and metric.identity_difference_count > 0
+        ),
+        "case_derived_only_mismatch": (
+            case.semantic_difference_count + case.identity_difference_count > 0
+            and all(
+                equality[item]
+                for item in tuple(DiagnosticLayer)[:-1]
+            )
+        ),
         "disposition": disposition,
         "schema_version": 1,
     }
     payload = {
-        key: value.value if hasattr(value, "value") else [x.to_dict() for x in value]
-        if key == "differences" else value
+        key: value.value
+        if hasattr(value, "value")
+        else [item.to_dict() for item in value]
+        if key in ("differences", "layer_summaries")
+        else value
         for key, value in kwargs.items()
     }
     return DeterminismDiagnosticResult(
@@ -160,13 +242,13 @@ def _run_item(item: tuple[object, object, object, str]):
         altered = _execute_pair(pair, case, variant)
     first = _payload(normal_a, config)
     return (
-        _result(
+        build_determinism_result(
             diagnostic_pair_id,
             DeterminismDiagnosticKind.SAME_CONTEXT_REPEAT,
             first,
             _payload(normal_b, config),
         ),
-        _result(
+        build_determinism_result(
             diagnostic_pair_id,
             DeterminismDiagnosticKind.DECIMAL_CONTEXT_PERTURBATION,
             first,
@@ -199,8 +281,11 @@ def run_determinism_diagnostics(
         for index, pair_results in enumerate(executor.map(_run_item, scheduled), 1):
             results.extend(pair_results)
             if index % 10 == 0:
-                print(f"C-008C-B RCA determinism progress {index}/40", flush=True)
+                print(
+                    f"C-008C-B RCA determinism progress {index}/40",
+                    flush=True,
+                )
     return tuple(results)
 
 
-__all__ = ["run_determinism_diagnostics"]
+__all__ = ["build_determinism_result", "run_determinism_diagnostics"]

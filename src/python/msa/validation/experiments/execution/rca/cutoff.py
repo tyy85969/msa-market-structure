@@ -11,7 +11,7 @@ from msa.validation.causal_audit import CausalAuditor
 from msa.validation.metrics import StructuralMetricEvaluator, validate_metric_evaluation_report
 
 from ...identity import semantic_id
-from ..cutoff import _metric_cutoff_projection, _truncate_source
+from ..cutoff import _truncate_source
 from ..manifest import load_c008c_b_authority
 from .contracts import (
     C008CBRCAManifest,
@@ -21,6 +21,7 @@ from .contracts import (
 )
 from .manifest import validate_c008c_b_rca_manifest
 from .payload_diff import payload_differences
+from .projections import project_metric_semantics
 
 
 def _payloads(values: tuple) -> list[object]:
@@ -29,11 +30,19 @@ def _payloads(values: tuple) -> list[object]:
 
 def _component(name: str, left: object, right: object) -> FixedCutoffComponentResult:
     total, differences = payload_differences(left, right)
+    first = differences[0] if differences else None
     kwargs = {
         "component_name": name,
         "equal": total == 0,
         "total_difference_count": total,
         "differences": differences,
+        "first_difference_path": None if first is None else first.path,
+        "first_left_subtree_digest": (
+            None if first is None else first.left_subtree_digest
+        ),
+        "first_right_subtree_digest": (
+            None if first is None else first.right_subtree_digest
+        ),
         "schema_version": 1,
     }
     payload = {**kwargs, "differences": [item.to_dict() for item in differences]}
@@ -98,7 +107,11 @@ def _execute(item: tuple[object, object, str, int, str]):
         _component("frame_bundles", frame_left, frame_right),
         _component("active_box_events", events_left, events_right),
         _component("frozen_boxes", frozen_left, frozen_right),
-        _component("metric_semantic", _metric_cutoff_projection(prefix_metric), _metric_cutoff_projection(extended_metric)),
+        _component(
+            "metric_semantic",
+            project_metric_semantics(prefix_metric.to_dict()),
+            project_metric_semantics(extended_metric.to_dict()),
+        ),
         _component("metric_full_payload", prefix_metric.to_dict(), extended_metric.to_dict()),
     )
     frame_equal, events_equal, frozen_equal = (components[i].equal for i in (1, 2, 3))
