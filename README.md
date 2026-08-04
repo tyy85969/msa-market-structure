@@ -88,6 +88,40 @@ repository attributes and rejects CRLF without repair. It executes no
 experiment outcome, performs no parameter optimization, and adds no trading
 behavior. See `docs/validation/c008c_experiment_authority.md`.
 
+## C-008C-B DEV/VALIDATION execution
+
+The `msa.validation.experiments.execution` boundary consumes the frozen
+C-008C-A authority and predeclares an outcome-free 390-pair
+DEVELOPMENT/VALIDATION schedule while quarantining all 130 seed-3 OOS pairs.
+It executes the exact public Core, causal audit, metric source binding,
+Decimal-context repeat, 125 Variant replay samples, partial Baseline replay,
+partial fixed-cutoff scope, descriptive same-case deltas, ten-rule Validation
+degeneration audit, and all twenty-seven frozen gates. Compact evidence stores
+complete public payload digests rather than duplicating internal Runs, and the
+full verifier re-executes the entire B scope. The report has no winner,
+leaderboard, parameter recommendation, profitability, or trading fields. See
+`docs/validation/c008c_b_dev_validation_execution.md`.
+
+For recovery and routine integrity checks,
+`generate_c008c_b_results.py --check-existing` validates the committed
+Authority, protected-source bytes, B contracts, identities, schedules, OOS
+quarantine, derived evidence, and canonical bytes without executing the Core.
+The separate `--check` mode retains the expensive full source-bound
+re-execution semantics.
+
+## C-008C-B root-cause diagnostics
+
+The `msa.validation.experiments.execution.rca` boundary freezes a bounded
+40-pair diagnostic schedule before execution, separates ordinary same-context
+repeat from precision-7 `ROUND_FLOOR` perturbation, attributes fifteen selected
+fixed-cutoff checkpoints by source/frame/ledger/metric layer, and distinguishes
+Variant-direct degeneration evidence from global Baseline propagation. Its
+canonical evidence is diagnostic only: it does not modify the original B
+evidence, recalculate Gates, change `BLOCKED_BEFORE_OOS`, or execute OOS.
+`generate_c008c_b_rca.py --check-existing` validates the committed RCA without
+re-executing diagnostics. See
+`docs/validation/c008c_b_root_cause_analysis.md`.
+
 ## 近期里程碑
 
 1. **Phase 0 — Repository Bootstrap**：固化项目规则、架构、决策、假设与验证规范

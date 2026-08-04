@@ -4,6 +4,13 @@
 
 ## [Unreleased]
 
+- Added bounded, source-bound C-008C-B root-cause diagnostics that independently
+  test same-context and altered-Decimal behavior, attribute selected fixed-cutoff
+  differences by component, and separate direct degeneration evidence from
+  global Baseline propagation without changing frozen B evidence or Gates.
+- Added a strict lightweight C-008C-B existing-evidence integrity check that
+  remains distinct from the full source-bound re-execution verifier.
+
 ### Phase 0 / Engineering Foundation
 - Added repository governance and contribution rules.
 - Added architecture documentation and a six-record ADR framework.
@@ -67,6 +74,7 @@
 - Added the predeclared C-008C experiment authority, deterministic synthetic dataset partitions, OAT sensitivity and ablation/increment plan, hard-gate and protected-source manifests, canonical LF evidence, and no-lookahead plan tests without executing outcomes.
 - Bound C-008C authority to its formal factories, replaced placeholder gates with typed policies, and froze the 520-pair execution scope, replay/cutoff samples, OOS coverage minima, and degeneration rules.
 - Pinned all 77 protected Python paths to LF raw worktree bytes and expanded every C-008C synthetic case to 32 pre-confirm plus 64 post-confirm complete H1 bars under a frozen capacity policy.
+- Added the C-008C-B outcome-free 390-pair DEV/VALIDATION execution manifest, strict compact contracts, exact public Core/audit/metric execution, altered-Decimal repeats, frozen replay and fixed-cutoff subsets, descriptive same-case deltas, ten-rule degeneration audit, twenty-seven gate results, canonical evidence, and full source-bound re-execution verifier while quarantining every seed-3 OOS outcome.
 
 ### Added
 - 初始化 MSA 项目仓库。
