@@ -47,11 +47,12 @@ _ZONE_SCORE_FIELDS = (
     "placement_factor",
     "selection_score",
 )
-_IDENTITY_OR_PROVENANCE_FIELDS = {
+_METRIC_REPORT_WRAPPER_FIELDS = frozenset({
     "metric_report_id",
     "source_run_id",
     "provenance",
-}
+})
+_MISSING_VALUE = "<MISSING>"
 
 
 class DecimalDiagnosisError(ValueError):
@@ -169,36 +170,75 @@ def _divergent_zone_scores(
     }
 
 
-def _first_metric_semantic_difference(
+def _metric_semantic_projection(
+    metric_report_payload: Mapping[str, object],
+) -> dict[str, object]:
+    """Remove only explicit top-level Metric wrapper/source fields."""
+
+    return {
+        key: value
+        for key, value in metric_report_payload.items()
+        if key not in _METRIC_REPORT_WRAPPER_FIELDS
+    }
+
+
+def _first_payload_difference(
     default_value: object,
     altered_value: object,
     path: str = "",
 ):
+    if type(default_value) is not type(altered_value):
+        return path or "/", default_value, altered_value
     if isinstance(default_value, dict) and isinstance(altered_value, dict):
         for key in default_value:
-            if key in _IDENTITY_OR_PROVENANCE_FIELDS or key.endswith("_id"):
-                continue
-            found = _first_metric_semantic_difference(
-                default_value[key], altered_value[key], f"{path}/{key}"
+            child_path = f"{path}/{key}"
+            if key not in altered_value:
+                return child_path, default_value[key], _MISSING_VALUE
+            found = _first_payload_difference(
+                default_value[key], altered_value[key], child_path
             )
             if found is not None:
                 return found
+        for key in altered_value:
+            if key not in default_value:
+                return f"{path}/{key}", _MISSING_VALUE, altered_value[key]
         return None
     if isinstance(default_value, list) and isinstance(altered_value, list):
         for index, (left, right) in enumerate(
             zip(default_value, altered_value)
         ):
-            found = _first_metric_semantic_difference(
+            found = _first_payload_difference(
                 left, right, f"{path}/{index}"
             )
             if found is not None:
                 return found
-        if len(default_value) != len(altered_value):
-            return path or "/", len(default_value), len(altered_value)
+        shared_length = min(len(default_value), len(altered_value))
+        if len(default_value) > shared_length:
+            return (
+                f"{path}/{shared_length}",
+                default_value[shared_length],
+                _MISSING_VALUE,
+            )
+        if len(altered_value) > shared_length:
+            return (
+                f"{path}/{shared_length}",
+                _MISSING_VALUE,
+                altered_value[shared_length],
+            )
         return None
     if default_value != altered_value:
         return path or "/", default_value, altered_value
     return None
+
+
+def _first_metric_semantic_difference(
+    default_value: Mapping[str, object],
+    altered_value: Mapping[str, object],
+):
+    return _first_payload_difference(
+        _metric_semantic_projection(default_value),
+        _metric_semantic_projection(altered_value),
+    )
 
 
 def reproduce_freshness_expression(

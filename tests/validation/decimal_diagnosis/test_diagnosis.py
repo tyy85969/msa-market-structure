@@ -7,6 +7,7 @@ import pytest
 from msa.validation.contracts import SyntheticScenarioKind
 from tools.validation.diagnose_core_decimal_context import (
     DecimalDiagnosisError,
+    _first_metric_semantic_difference,
     build_diagnosis,
     diagnose_cases,
     render_diagnosis,
@@ -88,6 +89,125 @@ def test_seed_three_and_more_than_three_cases_are_rejected() -> None:
                 (SyntheticScenarioKind.RANGE, 2),
             )
         )
+
+
+def test_formula_id_remains_metric_semantics() -> None:
+    default = {
+        "formula_registry": [{"formula_id": "formula-default"}],
+    }
+    altered = {
+        "formula_registry": [{"formula_id": "formula-altered"}],
+    }
+    assert _first_metric_semantic_difference(default, altered) == (
+        "/formula_registry/0/formula_id",
+        "formula-default",
+        "formula-altered",
+    )
+
+
+@pytest.mark.parametrize(
+    "field_name",
+    (
+        "event_id",
+        "observation_id",
+        "match_id",
+        "aggregate_id",
+        "future_domain_id",
+    ),
+)
+def test_domain_ids_remain_metric_semantics(field_name: str) -> None:
+    default = {"items": [{field_name: "domain-default"}]}
+    altered = {"items": [{field_name: "domain-altered"}]}
+    assert _first_metric_semantic_difference(default, altered) == (
+        f"/items/0/{field_name}",
+        "domain-default",
+        "domain-altered",
+    )
+
+
+@pytest.mark.parametrize(
+    "field_name",
+    ("metric_report_id", "source_run_id", "provenance"),
+)
+def test_only_explicit_top_level_metric_wrappers_are_ignored(
+    field_name: str,
+) -> None:
+    default = {field_name: "wrapper-default", "event_count": 1}
+    altered = {field_name: "wrapper-altered", "event_count": 1}
+    assert _first_metric_semantic_difference(default, altered) is None
+
+
+def test_wrapper_change_does_not_hide_first_semantic_difference() -> None:
+    default = {
+        "metric_report_id": "wrapper-default",
+        "source_run_id": "run-default",
+        "provenance": ["default"],
+        "formula_registry": [{"formula_id": "formula-default"}],
+    }
+    altered = {
+        "metric_report_id": "wrapper-altered",
+        "source_run_id": "run-altered",
+        "provenance": ["altered"],
+        "formula_registry": [{"formula_id": "formula-altered"}],
+    }
+    assert _first_metric_semantic_difference(default, altered) == (
+        "/formula_registry/0/formula_id",
+        "formula-default",
+        "formula-altered",
+    )
+
+
+def test_wrapper_names_are_semantic_below_metric_report_top_level() -> None:
+    default = {"events": [{"source_run_id": "nested-default"}]}
+    altered = {"events": [{"source_run_id": "nested-altered"}]}
+    assert _first_metric_semantic_difference(default, altered) == (
+        "/events/0/source_run_id",
+        "nested-default",
+        "nested-altered",
+    )
+
+
+@pytest.mark.parametrize(
+    ("default", "altered", "expected"),
+    (
+        (
+            {"events": [{"event_id": "event-default"}]},
+            {"events": [{}]},
+            ("/events/0/event_id", "event-default", "<MISSING>"),
+        ),
+        (
+            {"events": [{}]},
+            {"events": [{"event_id": "event-altered"}]},
+            ("/events/0/event_id", "<MISSING>", "event-altered"),
+        ),
+        (
+            {"event_count": 1},
+            {"event_count": "1"},
+            ("/event_count", 1, "1"),
+        ),
+        (
+            {"events": [{"event_id": "first"}, {"event_id": "second"}]},
+            {"events": [{"event_id": "second"}, {"event_id": "first"}]},
+            ("/events/0/event_id", "first", "second"),
+        ),
+        (
+            {"events": [{"event_id": "first"}]},
+            {
+                "events": [
+                    {"event_id": "first"},
+                    {"event_id": "extra"},
+                ]
+            },
+            ("/events/1", "<MISSING>", {"event_id": "extra"}),
+        ),
+    ),
+)
+def test_metric_semantic_difference_detects_shape_type_value_and_list_order(
+    default: dict[str, object],
+    altered: dict[str, object],
+    expected: tuple[object, object, object],
+) -> None:
+    assert _first_metric_semantic_difference(default, altered) == expected
 
 
 def test_minimal_reproduction_is_same_context_stable_and_cross_context_distinct(
