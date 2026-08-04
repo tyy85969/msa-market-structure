@@ -401,6 +401,8 @@ def _finding_v2(
     validation_case_ids: tuple[str, ...],
     facts: tuple[str, ...],
 ) -> ExperimentDegenerationFindingV2:
+    if insufficient and "applicable_variant_evidence_missing=true" not in facts:
+        facts = facts + ("applicable_variant_evidence_missing=true",)
     status = (
         DegenerationStatus.DEGENERATED
         if triggered
@@ -445,7 +447,8 @@ def _summary_v2(
 ) -> ExperimentDegenerationSummaryV2:
     triggered = tuple(item.rule_code for item in findings if item.triggered)
     insufficient = any(
-        item.status is DegenerationStatus.INSUFFICIENT_EVIDENCE
+        item.evidence_scope
+        is DegenerationEvidenceScope.TRUE_INSUFFICIENT_EVIDENCE
         for item in findings
     )
     status = (
@@ -688,11 +691,12 @@ def evaluate_validation_degeneration_v2(
             ),
             "FUTURE_PREFIX_REWRITE": (
                 False,
-                True,
+                False,
                 (),
                 (
-                    "variant_fixed_cutoff_evidence=unavailable",
-                    "baseline_global_evidence_not_propagated=true",
+                    "rule_applicability=baseline_global",
+                    "variant_trigger=false",
+                    "global_evidence_evaluated_separately=true",
                 ),
             ),
             "STRUCTURE_EVENT_COLLAPSE": (
@@ -753,8 +757,10 @@ def evaluate_validation_degeneration_v2(
             _finding_v2(
                 variant_id=variant.variant_id,
                 evidence_scope=(
-                    DegenerationEvidenceScope.VARIANT_EVIDENCE_UNAVAILABLE
+                    DegenerationEvidenceScope.NOT_APPLICABLE_GLOBAL_RULE
                     if code == "FUTURE_PREFIX_REWRITE"
+                    else DegenerationEvidenceScope.TRUE_INSUFFICIENT_EVIDENCE
+                    if facts_by_rule[code][1]
                     else DegenerationEvidenceScope.VARIANT_DIRECT
                 ),
                 evidence_source_ids=facts_by_rule[code][2],

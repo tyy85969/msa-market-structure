@@ -471,6 +471,25 @@ def evaluate_c008c_b_v2_gates(
         raise C008CBGateError("one comparison cannot bind both B-v2 Gates")
     if digest(same_payload) == digest(decimal_payload):
         raise C008CBGateError("B-v2 Gate evidence payload digests must differ")
+    expected_variant_ids = manifest.variant_ids[1:]
+    if tuple(item.variant_id for item in degeneration_summaries) != expected_variant_ids:
+        raise C008CBGateError(
+            "B-v2 degeneration summaries must bind all 25 non-Baseline Variants"
+        )
+    expected_cutoff_ids = tuple(
+        item.fixed_cutoff_comparison_id for item in fixed_cutoff_comparisons
+    )
+    if (
+        global_degeneration_evidence.baseline_variant_id
+        != manifest.variant_ids[0]
+        or global_degeneration_evidence.evidence_subject_id
+        != manifest.variant_ids[0]
+        or global_degeneration_evidence.evidence_source_ids
+        != expected_cutoff_ids
+    ):
+        raise C008CBGateError(
+            "B-v2 global rewrite evidence must bind Baseline and all 15 cutoff results"
+        )
 
     passed_cases = sum(
         item.status is ExperimentCaseStatus.PASSED for item in case_results
@@ -506,13 +525,18 @@ def evaluate_c008c_b_v2_gates(
         item.status is FixedCutoffStatus.STABLE
         for item in fixed_cutoff_comparisons
     )
-    degeneration_ok = all(
+    variant_degeneration_ok = all(
         item.status
         not in (
             DegenerationStatus.DEGENERATED,
             DegenerationStatus.INSUFFICIENT_EVIDENCE,
         )
         for item in degeneration_summaries
+    )
+    global_rewrite_ok = (
+        not global_degeneration_evidence.triggered
+        and global_degeneration_evidence.status
+        is DegenerationStatus.NOT_DEGENERATED
     )
     ids = {
         "manifest": (manifest.execution_manifest_id,),
@@ -525,7 +549,8 @@ def evaluate_c008c_b_v2_gates(
         ),
         "degeneration": tuple(
             item.degeneration_summary_id for item in degeneration_summaries
-        ),
+        )
+        + (global_degeneration_evidence.global_evidence_id,),
     }
     payloads = {
         "manifest": manifest.to_dict(),
@@ -533,7 +558,14 @@ def evaluate_c008c_b_v2_gates(
         "same": same_payload,
         "decimal": decimal_payload,
         "cutoff": [item.to_dict() for item in fixed_cutoff_comparisons],
-        "degeneration": [item.to_dict() for item in degeneration_summaries],
+        "degeneration": {
+            "variant_summaries": [
+                item.to_dict() for item in degeneration_summaries
+            ],
+            "global_rewrite_evidence": (
+                global_degeneration_evidence.to_dict()
+            ),
+        },
     }
     results: list[ExperimentGateResultV2] = []
     for gate in gates:
@@ -645,16 +677,15 @@ def evaluate_c008c_b_v2_gates(
         elif code == "NO_NEIGHBORHOOD_DEGENERATION":
             status = (
                 GateEvaluationStatus.PASS
-                if degeneration_ok
+                if variant_degeneration_ok and global_rewrite_ok
                 else GateEvaluationStatus.FAIL
             )
-            evidence_kind = "VARIANT_SUBJECT_DEGENERATION"
+            evidence_kind = "VARIANT_AND_BASELINE_GLOBAL_DEGENERATION"
             evidence_ids = ids["degeneration"]
             evidence_payload = payloads["degeneration"]
             rationale = (
-                "Variant findings bind Variant subjects; Baseline rewrite is "
-                "separate global evidence "
-                f"{global_degeneration_evidence.global_evidence_id}"
+                "25 Variant summaries and separate Baseline/global rewrite "
+                "evidence are jointly evaluated"
             )
         elif code == "FREEZE_SOURCE_BOUND":
             status = GateEvaluationStatus.DEFERRED_TO_C008C_C
@@ -688,4 +719,51 @@ def evaluate_c008c_b_v2_gates(
     return tuple(results)
 
 
-__all__ = ["evaluate_c008c_b_gates", "evaluate_c008c_b_v2_gates"]
+def validate_c008c_b_v2_gate_results(
+    gate_results: tuple[ExperimentGateResultV2, ...],
+    manifest: C008CBExecutionManifest,
+    case_results: tuple[ExperimentCaseResult, ...],
+    same_context_comparisons: tuple[ExperimentDeterminismComparisonV2, ...],
+    decimal_context_comparisons: tuple[ExperimentDeterminismComparisonV2, ...],
+    replay_comparisons: tuple[ExperimentReplayComparison, ...],
+    fixed_cutoff_comparisons: tuple[ExperimentFixedCutoffComparison, ...],
+    degeneration_summaries: tuple[ExperimentDegenerationSummaryV2, ...],
+    global_degeneration_evidence: ExperimentGlobalDegenerationEvidenceV2,
+    root: Path | None = None,
+) -> tuple[ExperimentGateResultV2, ...]:
+    """Recompute B-v2 Gate derivation and reject stale or under-bound evidence."""
+
+    if (
+        not isinstance(gate_results, tuple)
+        or len(gate_results) != 27
+        or any(
+            not isinstance(item, ExperimentGateResultV2)
+            for item in gate_results
+        )
+    ):
+        raise C008CBGateError("exactly 27 B-v2 GateResults are required")
+    expected = evaluate_c008c_b_v2_gates(
+        manifest,
+        case_results,
+        same_context_comparisons,
+        decimal_context_comparisons,
+        replay_comparisons,
+        fixed_cutoff_comparisons,
+        degeneration_summaries,
+        global_degeneration_evidence,
+        root,
+    )
+    if tuple(item.to_dict() for item in gate_results) != tuple(
+        item.to_dict() for item in expected
+    ):
+        raise C008CBGateError(
+            "B-v2 GateResults do not match recomputed evidence attribution"
+        )
+    return gate_results
+
+
+__all__ = [
+    "evaluate_c008c_b_gates",
+    "evaluate_c008c_b_v2_gates",
+    "validate_c008c_b_v2_gate_results",
+]

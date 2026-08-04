@@ -35,15 +35,28 @@ between the two Gates, and derives the two Gate booleans separately.
 
 Baseline fixed-cutoff evidence has the subject `Baseline` and the scope
 `BASELINE_GLOBAL`. A Baseline `FUTURE_PREFIX_REWRITE` result may be reported as
-one global fact, but it is not part of any Variant Gate evidence set.
+one global fact. It binds the Baseline plus all 15 fixed-cutoff comparison IDs;
+it is evaluated separately from Variant findings and is never propagated as a
+Variant-direct trigger.
 
 Every Variant finding binds that Variant as `evidence_subject_id`. Because the
-frozen B schedule contains no Variant fixed-cutoff execution, each Variant
-`FUTURE_PREFIX_REWRITE` finding is explicitly
-`VARIANT_EVIDENCE_UNAVAILABLE` / `INSUFFICIENT_EVIDENCE`; it is never triggered
-from the Baseline result. The remaining Variant rules bind direct Variant case
-or replay evidence.
+rule is Baseline/global by definition, each Variant `FUTURE_PREFIX_REWRITE`
+finding is `NOT_APPLICABLE_GLOBAL_RULE` / `NOT_DEGENERATED`, has no source IDs,
+and records `rule_applicability=baseline_global`, `variant_trigger=false`, and
+`global_evidence_evaluated_separately=true`. This non-applicability is distinct
+from `TRUE_INSUFFICIENT_EVIDENCE`, which is reserved for missing evidence that
+is actually applicable to the Variant. The remaining Variant rules bind direct
+Variant case or replay evidence.
 
-This fail-closed distinction prevents a Baseline/global rewrite from becoming
-25 Variant-direct degeneration triggers while preserving the frozen ten-rule
-policy and all historical evidence.
+`NO_NEIGHBORHOOD_DEGENERATION` binds exactly the 25 Variant summary IDs followed
+by the global rewrite evidence ID. Its digest covers the canonical object
+`{"variant_summaries": [...], "global_rewrite_evidence": {...}}`. The Gate
+passes only when no Variant summary is degenerated or truly insufficient and
+the global rewrite evidence is untriggered / `NOT_DEGENERATED`. The verifier
+recomputes this binding, payload digest, status, and Gate identity from source
+evidence.
+
+This distinction prevents a Baseline/global rewrite from becoming 25
+Variant-direct degeneration triggers without making the global rule a
+permanent Variant insufficiency, while preserving the frozen ten-rule policy
+and all historical evidence.

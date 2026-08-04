@@ -42,8 +42,9 @@ class DeterminismEvidenceKind(_V2Enum):
 
 class DegenerationEvidenceScope(_V2Enum):
     VARIANT_DIRECT = "VARIANT_DIRECT"
-    VARIANT_EVIDENCE_UNAVAILABLE = "VARIANT_EVIDENCE_UNAVAILABLE"
+    NOT_APPLICABLE_GLOBAL_RULE = "NOT_APPLICABLE_GLOBAL_RULE"
     BASELINE_GLOBAL = "BASELINE_GLOBAL"
+    TRUE_INSUFFICIENT_EVIDENCE = "TRUE_INSUFFICIENT_EVIDENCE"
 
 
 def _text(value: object, label: str, error: type[ValueError]) -> str:
@@ -167,7 +168,7 @@ class C008CBV2ExecutionContract:
             self.baseline_rewrite_evidence_scope
             is not DegenerationEvidenceScope.BASELINE_GLOBAL
             or self.variant_rewrite_evidence_scope
-            is not DegenerationEvidenceScope.VARIANT_EVIDENCE_UNAVAILABLE
+            is not DegenerationEvidenceScope.NOT_APPLICABLE_GLOBAL_RULE
         ):
             raise error("B-v2 rewrite evidence scopes are incorrect")
         for name in (
@@ -286,7 +287,7 @@ def build_c008c_b_v2_execution_contract(
             DegenerationEvidenceScope.BASELINE_GLOBAL
         ),
         "variant_rewrite_evidence_scope": (
-            DegenerationEvidenceScope.VARIANT_EVIDENCE_UNAVAILABLE
+            DegenerationEvidenceScope.NOT_APPLICABLE_GLOBAL_RULE
         ),
         "historical_evidence_superseded": False,
         "outcome_execution_performed": False,
@@ -485,16 +486,46 @@ class ExperimentDegenerationFindingV2:
         if self.rule_code == "FUTURE_PREFIX_REWRITE":
             if (
                 self.evidence_scope
-                is not DegenerationEvidenceScope.VARIANT_EVIDENCE_UNAVAILABLE
+                is not DegenerationEvidenceScope.NOT_APPLICABLE_GLOBAL_RULE
                 or self.triggered
-                or self.status is not DegenerationStatus.INSUFFICIENT_EVIDENCE
+                or self.status is not DegenerationStatus.NOT_DEGENERATED
                 or self.evidence_source_ids
             ):
                 raise error(
-                    "Variant FUTURE_PREFIX_REWRITE requires unavailable direct evidence"
+                    "Variant FUTURE_PREFIX_REWRITE must be a non-triggering global-only rule"
                 )
-        elif self.evidence_scope is not DegenerationEvidenceScope.VARIANT_DIRECT:
-            raise error("non-rewrite Variant findings require direct evidence")
+            if set(self.facts) != {
+                "rule_applicability=baseline_global",
+                "variant_trigger=false",
+                "global_evidence_evaluated_separately=true",
+            }:
+                raise error(
+                    "Variant FUTURE_PREFIX_REWRITE facts must declare global applicability"
+                )
+        elif self.evidence_scope is DegenerationEvidenceScope.NOT_APPLICABLE_GLOBAL_RULE:
+            raise error(
+                "NOT_APPLICABLE_GLOBAL_RULE is reserved for FUTURE_PREFIX_REWRITE"
+            )
+        elif self.evidence_scope is DegenerationEvidenceScope.TRUE_INSUFFICIENT_EVIDENCE:
+            if self.triggered or self.status is not DegenerationStatus.INSUFFICIENT_EVIDENCE:
+                raise error(
+                    "true insufficient evidence must be untriggered and insufficient"
+                )
+            if "applicable_variant_evidence_missing=true" not in self.facts:
+                raise error(
+                    "true insufficient evidence must identify missing applicable evidence"
+                )
+        elif self.evidence_scope is DegenerationEvidenceScope.VARIANT_DIRECT:
+            if self.status is DegenerationStatus.INSUFFICIENT_EVIDENCE:
+                raise error(
+                    "insufficient applicable evidence requires TRUE_INSUFFICIENT_EVIDENCE"
+                )
+            if "applicable_variant_evidence_missing=true" in self.facts:
+                raise error(
+                    "direct evidence cannot claim applicable evidence is missing"
+                )
+        else:
+            raise error("unsupported Variant degeneration evidence scope")
         _identity(
             self,
             id_field="degeneration_finding_id",
@@ -591,7 +622,8 @@ class ExperimentDegenerationSummaryV2:
         ):
             raise error("non_zero_validation_delta_count must be non-negative int")
         insufficient = any(
-            item.status is DegenerationStatus.INSUFFICIENT_EVIDENCE
+            item.evidence_scope
+            is DegenerationEvidenceScope.TRUE_INSUFFICIENT_EVIDENCE
             for item in self.findings
         )
         expected = (
