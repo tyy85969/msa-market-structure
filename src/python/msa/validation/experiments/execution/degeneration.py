@@ -21,6 +21,14 @@ from .contracts import (
     DegenerationStatus,
     ReplayComparisonStatus,
 )
+from .contracts_v2 import (
+    B_V2_EXECUTION_SEMANTICS,
+    DegenerationEvidenceScope,
+    ExperimentDegenerationFindingV2,
+    ExperimentDegenerationSummaryV2,
+    ExperimentGlobalDegenerationEvidenceV2,
+    v2_payload_id,
+)
 from .errors import C008CBDegenerationError
 from .manifest import load_c008c_b_authority
 
@@ -382,4 +390,399 @@ def evaluate_validation_degeneration(
     return result
 
 
-__all__ = ["evaluate_validation_degeneration"]
+def _finding_v2(
+    *,
+    variant_id: str,
+    evidence_scope: DegenerationEvidenceScope,
+    evidence_source_ids: tuple[str, ...],
+    rule_code: str,
+    triggered: bool,
+    insufficient: bool,
+    validation_case_ids: tuple[str, ...],
+    facts: tuple[str, ...],
+) -> ExperimentDegenerationFindingV2:
+    status = (
+        DegenerationStatus.DEGENERATED
+        if triggered
+        else DegenerationStatus.INSUFFICIENT_EVIDENCE
+        if insufficient
+        else DegenerationStatus.NOT_DEGENERATED
+    )
+    kwargs = {
+        "execution_semantics": B_V2_EXECUTION_SEMANTICS,
+        "variant_id": variant_id,
+        "evidence_subject_id": variant_id,
+        "evidence_scope": evidence_scope,
+        "evidence_source_ids": evidence_source_ids,
+        "rule_code": rule_code,
+        "triggered": triggered,
+        "status": status,
+        "validation_case_ids": validation_case_ids,
+        "facts": facts,
+        "schema_version": 2,
+    }
+    payload = {
+        **kwargs,
+        "evidence_scope": evidence_scope.value,
+        "evidence_source_ids": list(evidence_source_ids),
+        "status": status.value,
+        "validation_case_ids": list(validation_case_ids),
+        "facts": list(facts),
+    }
+    return ExperimentDegenerationFindingV2(
+        degeneration_finding_id=v2_payload_id(
+            ExperimentDegenerationFindingV2._PREFIX, payload
+        ),
+        **kwargs,
+    )
+
+
+def _summary_v2(
+    *,
+    variant_id: str,
+    findings: tuple[ExperimentDegenerationFindingV2, ...],
+    non_zero_validation_delta_count: int,
+) -> ExperimentDegenerationSummaryV2:
+    triggered = tuple(item.rule_code for item in findings if item.triggered)
+    insufficient = any(
+        item.status is DegenerationStatus.INSUFFICIENT_EVIDENCE
+        for item in findings
+    )
+    status = (
+        DegenerationStatus.DEGENERATED
+        if triggered
+        else DegenerationStatus.INSUFFICIENT_EVIDENCE
+        if insufficient
+        else DegenerationStatus.SENSITIVE
+        if non_zero_validation_delta_count
+        else DegenerationStatus.NOT_DEGENERATED
+    )
+    kwargs = {
+        "execution_semantics": B_V2_EXECUTION_SEMANTICS,
+        "variant_id": variant_id,
+        "status": status,
+        "findings": findings,
+        "triggered_rule_codes": triggered,
+        "non_zero_validation_delta_count": non_zero_validation_delta_count,
+        "schema_version": 2,
+    }
+    payload = {
+        **kwargs,
+        "status": status.value,
+        "findings": [item.to_dict() for item in findings],
+        "triggered_rule_codes": list(triggered),
+    }
+    return ExperimentDegenerationSummaryV2(
+        degeneration_summary_id=v2_payload_id(
+            ExperimentDegenerationSummaryV2._PREFIX, payload
+        ),
+        **kwargs,
+    )
+
+
+def _global_rewrite_evidence_v2(
+    baseline_variant_id: str,
+    fixed_cutoff_comparisons: tuple[ExperimentFixedCutoffComparison, ...],
+) -> ExperimentGlobalDegenerationEvidenceV2:
+    triggered = any(
+        item.status is not FixedCutoffStatus.STABLE
+        for item in fixed_cutoff_comparisons
+    )
+    source_ids = tuple(
+        item.fixed_cutoff_comparison_id for item in fixed_cutoff_comparisons
+    )
+    status = (
+        DegenerationStatus.DEGENERATED
+        if triggered
+        else DegenerationStatus.NOT_DEGENERATED
+    )
+    facts = (
+        f"baseline_fixed_cutoff_cases={len(fixed_cutoff_comparisons)}",
+        "baseline_cutoff_non_stable="
+        + str(
+            sum(
+                item.status is not FixedCutoffStatus.STABLE
+                for item in fixed_cutoff_comparisons
+            )
+        ),
+        "variant_propagation=false",
+    )
+    kwargs = {
+        "execution_semantics": B_V2_EXECUTION_SEMANTICS,
+        "baseline_variant_id": baseline_variant_id,
+        "evidence_subject_id": baseline_variant_id,
+        "evidence_scope": DegenerationEvidenceScope.BASELINE_GLOBAL,
+        "evidence_source_ids": source_ids,
+        "rule_code": "FUTURE_PREFIX_REWRITE",
+        "triggered": triggered,
+        "status": status,
+        "facts": facts,
+        "schema_version": 2,
+    }
+    payload = {
+        **kwargs,
+        "evidence_scope": DegenerationEvidenceScope.BASELINE_GLOBAL.value,
+        "evidence_source_ids": list(source_ids),
+        "status": status.value,
+        "facts": list(facts),
+    }
+    return ExperimentGlobalDegenerationEvidenceV2(
+        global_evidence_id=v2_payload_id(
+            ExperimentGlobalDegenerationEvidenceV2._PREFIX, payload
+        ),
+        **kwargs,
+    )
+
+
+def evaluate_validation_degeneration_v2(
+    case_results: tuple[ExperimentCaseResult, ...],
+    metric_delta_summaries: tuple[ExperimentMetricDeltaSummary, ...],
+    replay_comparisons: tuple[ExperimentReplayComparison, ...],
+    fixed_cutoff_comparisons: tuple[ExperimentFixedCutoffComparison, ...],
+    root: Path | None = None,
+) -> tuple[
+    tuple[ExperimentDegenerationSummaryV2, ...],
+    ExperimentGlobalDegenerationEvidenceV2,
+]:
+    """Derive subject-bound Variant findings and separate Baseline evidence."""
+
+    if (
+        len(case_results) != 390
+        or len(metric_delta_summaries) != 50
+        or len(replay_comparisons) != 140
+        or len(fixed_cutoff_comparisons) != 15
+    ):
+        raise C008CBDegenerationError(
+            "B-v2 degeneration requires complete non-OOS B-stage evidence"
+        )
+    if any(
+        item.seed == 3 or item.partition is DatasetPartition.OOS
+        for item in case_results
+    ):
+        raise C008CBDegenerationError("B-v2 degeneration forbids OOS outcomes")
+    _, dataset, gates, plan, _ = load_c008c_b_authority(root)
+    gate = next(
+        item for item in gates if item.code == "NO_NEIGHBORHOOD_DEGENERATION"
+    )
+    rule_codes = tuple(item.rule_code for item in gate.policy.degeneration_rules)
+    if len(rule_codes) != 10:
+        raise C008CBDegenerationError("B-v2 requires ten frozen rules")
+    validation_case_ids = tuple(
+        item.dataset_case_id
+        for item in dataset.cases
+        if item.partition is DatasetPartition.VALIDATION
+    )
+    result_index = {
+        (item.dataset_case_id, item.variant_id): item for item in case_results
+    }
+    baseline_id = plan.variants[0].variant_id
+    baseline_results = tuple(
+        result_index[(case_id, baseline_id)] for case_id in validation_case_ids
+    )
+    baseline_events = sum(item.event_count for item in baseline_results)
+    baseline_boxes = sum(item.box_episode_count for item in baseline_results)
+    baseline_coverage = _coverage_counts(baseline_results)
+    replay_by_variant = {
+        variant.variant_id: tuple(
+            item
+            for item in replay_comparisons
+            if item.scope == "VARIANT" and item.variant_id == variant.variant_id
+        )
+        for variant in plan.variants[1:]
+    }
+    delta_by_variant = {
+        item.variant_id: item
+        for item in metric_delta_summaries
+        if item.partition is DatasetPartition.VALIDATION
+    }
+    summaries: list[ExperimentDegenerationSummaryV2] = []
+    for variant in plan.variants[1:]:
+        results = tuple(
+            result_index[(case_id, variant.variant_id)]
+            for case_id in validation_case_ids
+        )
+        result_ids = tuple(item.case_result_id for item in results)
+        replay = replay_by_variant[variant.variant_id]
+        replay_ids = tuple(item.replay_comparison_id for item in replay)
+        variant_events = sum(item.event_count for item in results)
+        variant_boxes = sum(item.box_episode_count for item in results)
+        variant_coverage = _coverage_counts(results)
+        collapsed_metrics = (
+            ()
+            if baseline_coverage is None or variant_coverage is None
+            else _coverage_collapsed_metrics(baseline_coverage, variant_coverage)
+        )
+        facts_by_rule = {
+            "PIPELINE_EXECUTION_FAILURE": (
+                any(
+                    item.status is ExperimentCaseStatus.PIPELINE_FAILED
+                    for item in results
+                ),
+                False,
+                result_ids,
+                (
+                    "pipeline_failures="
+                    + str(
+                        sum(
+                            item.status
+                            is ExperimentCaseStatus.PIPELINE_FAILED
+                            for item in results
+                        )
+                    ),
+                ),
+            ),
+            "CAUSAL_AUDIT_FAILURE": (
+                any(
+                    item.status is ExperimentCaseStatus.CAUSAL_AUDIT_FAILED
+                    for item in results
+                ),
+                False,
+                result_ids,
+                (
+                    "causal_audit_failures="
+                    + str(
+                        sum(
+                            item.status
+                            is ExperimentCaseStatus.CAUSAL_AUDIT_FAILED
+                            for item in results
+                        )
+                    ),
+                ),
+            ),
+            "METRIC_SOURCE_BIND_FAILURE": (
+                any(
+                    item.status
+                    is ExperimentCaseStatus.METRIC_SOURCE_BIND_FAILED
+                    for item in results
+                ),
+                False,
+                result_ids,
+                (
+                    "metric_source_bind_failures="
+                    + str(
+                        sum(
+                            item.status
+                            is ExperimentCaseStatus.METRIC_SOURCE_BIND_FAILED
+                            for item in results
+                        )
+                    ),
+                ),
+            ),
+            "BATCH_REPLAY_MISMATCH": (
+                any(
+                    item.status is not ReplayComparisonStatus.MATCH
+                    for item in replay
+                ),
+                len(replay) != 5,
+                replay_ids,
+                (
+                    f"replay_samples={len(replay)}",
+                    "replay_non_matches="
+                    + str(
+                        sum(
+                            item.status is not ReplayComparisonStatus.MATCH
+                            for item in replay
+                        )
+                    ),
+                ),
+            ),
+            "FUTURE_PREFIX_REWRITE": (
+                False,
+                True,
+                (),
+                (
+                    "variant_fixed_cutoff_evidence=unavailable",
+                    "baseline_global_evidence_not_propagated=true",
+                ),
+            ),
+            "STRUCTURE_EVENT_COLLAPSE": (
+                baseline_events >= 10 and variant_events == 0,
+                False,
+                result_ids,
+                (
+                    f"baseline_structure_events={baseline_events}",
+                    f"variant_structure_events={variant_events}",
+                ),
+            ),
+            "BOX_EPISODE_COLLAPSE": (
+                baseline_boxes >= 5 and variant_boxes == 0,
+                False,
+                result_ids,
+                (
+                    f"baseline_box_episodes={baseline_boxes}",
+                    f"variant_box_episodes={variant_boxes}",
+                ),
+            ),
+            "MULTI_METRIC_COVERAGE_COLLAPSE": (
+                len(collapsed_metrics) >= 5,
+                baseline_coverage is None or variant_coverage is None,
+                result_ids,
+                (
+                    f"collapsed_metric_count={len(collapsed_metrics)}",
+                    "collapsed_metrics="
+                    + (
+                        ",".join(collapsed_metrics)
+                        if collapsed_metrics
+                        else "none"
+                    ),
+                    "decline_fraction_operator=>0.90",
+                ),
+            ),
+            "AGGREGATE_SET_INCOMPLETE": (
+                any(len(item.aggregates) != 10 for item in results),
+                False,
+                result_ids,
+                (
+                    "incomplete_case_count="
+                    + str(
+                        sum(len(item.aggregates) != 10 for item in results)
+                    ),
+                ),
+            ),
+            "INVALID_OR_REPAIRED_CONFIG": (
+                False,
+                False,
+                result_ids,
+                (
+                    "formal_frozen_config_validated=true",
+                    "automatic_repair_used=false",
+                ),
+            ),
+        }
+        findings = tuple(
+            _finding_v2(
+                variant_id=variant.variant_id,
+                evidence_scope=(
+                    DegenerationEvidenceScope.VARIANT_EVIDENCE_UNAVAILABLE
+                    if code == "FUTURE_PREFIX_REWRITE"
+                    else DegenerationEvidenceScope.VARIANT_DIRECT
+                ),
+                evidence_source_ids=facts_by_rule[code][2],
+                rule_code=code,
+                triggered=facts_by_rule[code][0],
+                insufficient=facts_by_rule[code][1],
+                validation_case_ids=validation_case_ids,
+                facts=facts_by_rule[code][3],
+            )
+            for code in rule_codes
+        )
+        summaries.append(
+            _summary_v2(
+                variant_id=variant.variant_id,
+                findings=findings,
+                non_zero_validation_delta_count=(
+                    delta_by_variant[variant.variant_id].non_zero_count
+                ),
+            )
+        )
+    if len(summaries) != 25:
+        raise C008CBDegenerationError("B-v2 requires 25 Variant summaries")
+    return tuple(summaries), _global_rewrite_evidence_v2(
+        baseline_id, fixed_cutoff_comparisons
+    )
+
+
+__all__ = [
+    "evaluate_validation_degeneration",
+    "evaluate_validation_degeneration_v2",
+]

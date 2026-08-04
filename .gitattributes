@@ -1,5 +1,6 @@
 docs/reference/*.json text eol=lf
 docs/validation/evidence/*.json text eol=lf
+docs/validation/c008c_b_root_cause_analysis.md text eol=lf
 src/python/msa/reference/** text eol=lf
 src/python/msa/research/** text eol=lf
 src/python/msa/validation/metrics/** text eol=lf
