@@ -1,0 +1,62 @@
+# C-008C-B-v2 Execution Semantics
+
+This document defines a harness correction only. It does not contain or
+authorize an experiment outcome, formal Gate recalculation, Replay run,
+fixed-cutoff execution, OOS access, C-008C-C, or C-009 work.
+
+## Version boundary
+
+`C-008C-B-v2` is a new execution-semantics contract with schema version 2 and
+`c008c-b-v2-*` identities. The historical C-008C-B manifest, report, Gate
+results, RCA evidence, and RCA lock remain schema version 1 historical facts.
+They are not migrated, overwritten, or reinterpreted by B-v2.
+
+The outcome-free `C008CBV2ExecutionContract` binds the existing frozen 390
+DEV/VALIDATION pair schedule and keeps all 130 seed-3/OOS pairs deferred. Its
+three result labels are `NORMAL_A`, `NORMAL_B`, and
+`ALTERED_DECIMAL_CONTEXT`.
+
+## Determinism evidence
+
+Each future B-v2 pair execution produces two independent comparisons:
+
+1. `SAME_CONTEXT_REPEAT` compares normal A only with independently executed
+   normal B. Only these comparison IDs and their payload digest may bind
+   `DETERMINISTIC_REPEAT`.
+2. `DECIMAL_CONTEXT_PERTURBATION` compares normal A only with an independently
+   executed altered-Decimal result. Only these comparison IDs and their payload
+   digest may bind `DECIMAL_CONTEXT_INDEPENDENCE`.
+
+The comparison kind participates in semantic identity and canonical payload.
+The evaluator rejects shared comparison IDs or equal evidence payload digests
+between the two Gates, and derives the two Gate booleans separately.
+
+## Degeneration evidence subjects
+
+Baseline fixed-cutoff evidence has the subject `Baseline` and the scope
+`BASELINE_GLOBAL`. A Baseline `FUTURE_PREFIX_REWRITE` result may be reported as
+one global fact. It binds the Baseline plus all 15 fixed-cutoff comparison IDs;
+it is evaluated separately from Variant findings and is never propagated as a
+Variant-direct trigger.
+
+Every Variant finding binds that Variant as `evidence_subject_id`. Because the
+rule is Baseline/global by definition, each Variant `FUTURE_PREFIX_REWRITE`
+finding is `NOT_APPLICABLE_GLOBAL_RULE` / `NOT_DEGENERATED`, has no source IDs,
+and records `rule_applicability=baseline_global`, `variant_trigger=false`, and
+`global_evidence_evaluated_separately=true`. This non-applicability is distinct
+from `TRUE_INSUFFICIENT_EVIDENCE`, which is reserved for missing evidence that
+is actually applicable to the Variant. The remaining Variant rules bind direct
+Variant case or replay evidence.
+
+`NO_NEIGHBORHOOD_DEGENERATION` binds exactly the 25 Variant summary IDs followed
+by the global rewrite evidence ID. Its digest covers the canonical object
+`{"variant_summaries": [...], "global_rewrite_evidence": {...}}`. The Gate
+passes only when no Variant summary is degenerated or truly insufficient and
+the global rewrite evidence is untriggered / `NOT_DEGENERATED`. The verifier
+recomputes this binding, payload digest, status, and Gate identity from source
+evidence.
+
+This distinction prevents a Baseline/global rewrite from becoming 25
+Variant-direct degeneration triggers without making the global rule a
+permanent Variant insufficiency, while preserving the frozen ten-rule policy
+and all historical evidence.
