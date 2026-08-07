@@ -1,23 +1,47 @@
 import hashlib
+import json
 from pathlib import Path
 
 from msa.validation.experiments import (
+    ProtectedSourceManifest,
     build_c008c_synthetic_dataset,
     build_protected_source_manifest,
     core_experiment_baseline,
     default_c008c_experiment_plan,
 )
 from msa.validation.experiments.identity import digest
+from msa.validation.remediation import (
+    validate_historical_protected_source_transition,
+)
 
 
 ROOT = Path(__file__).resolve().parents[3]
+HISTORICAL_PROTECTED_MANIFEST_PATH = (
+    ROOT / "docs/validation/evidence/c008c_protected_source_manifest.json"
+)
+HISTORICAL_PROTECTED_MANIFEST_ID = (
+    "c008c-protected-source-manifest-v1-"
+    "f93cda3d0966ee1340addebe36e8c008591d94d19d966828471721a18fdf2356"
+)
+POST_H2_ADDED_PATH = (
+    "src/python/msa/research/resonance/decimal_arithmetic.py"
+)
+
+
+def _historical_protected_manifest() -> ProtectedSourceManifest:
+    return ProtectedSourceManifest.from_dict(
+        json.loads(
+            HISTORICAL_PROTECTED_MANIFEST_PATH.read_text(encoding="utf-8")
+        )
+    )
 
 
 def test_c008c_authority_goldens() -> None:
     baseline = core_experiment_baseline()
     dataset = build_c008c_synthetic_dataset()
     plan = default_c008c_experiment_plan()
-    protected = build_protected_source_manifest()
+    current_protected = build_protected_source_manifest()
+    historical_protected = _historical_protected_manifest()
     assert baseline.baseline_id == (
         "c008c-core-experiment-baseline-v1-"
         "3b135b1843debedb2709811369a92ee0be729e9d2f04c510c5a0f9ca471983de"
@@ -86,9 +110,21 @@ def test_c008c_authority_goldens() -> None:
         "c008c-experiment-plan-v1-"
         "fb38f9cc47d2d4396fa9ad26b74c3e821d07fca6e926e40bc319e819bda611b5"
     )
-    assert protected.protected_source_manifest_id == (
-        "c008c-protected-source-manifest-v1-"
-        "f93cda3d0966ee1340addebe36e8c008591d94d19d966828471721a18fdf2356"
+    assert len(historical_protected.files) == 77
+    assert (
+        historical_protected.protected_source_manifest_id
+        == HISTORICAL_PROTECTED_MANIFEST_ID
+    )
+    historical_paths = {
+        item.relative_path for item in historical_protected.files
+    }
+    current_paths = {
+        item.relative_path for item in current_protected.files
+    }
+    assert current_paths == historical_paths | {POST_H2_ADDED_PATH}
+    assert len(current_paths) == len(historical_paths) + 1
+    validate_historical_protected_source_transition(
+        historical_protected, ROOT
     )
 
 

@@ -1,18 +1,33 @@
 from __future__ import annotations
 
 from decimal import Decimal, getcontext
+from pathlib import Path
 
 import pytest
 
 from msa.validation.contracts import SyntheticScenarioKind
+from msa.validation.experiments.synthetic_suite import (
+    build_synthetic_source_input,
+)
 from tools.validation.diagnose_core_decimal_context import (
+    DIAGNOSIS_VERSION,
+    MAXIMUM_CASES,
+    SELECTED_SCENARIOS,
+    VALIDATION_SEED,
     DecimalDiagnosisError,
+    _ALTERED_CONTEXT,
+    _DEFAULT_CONTEXT,
+    _first_numeric_divergence,
     _first_metric_semantic_difference,
+    _run_once,
     build_diagnosis,
     diagnose_cases,
     render_diagnosis,
     reproduce_freshness_expression,
 )
+
+
+ROOT = Path(__file__).resolve().parents[3]
 
 
 def _context_snapshot() -> tuple[object, ...]:
@@ -39,42 +54,14 @@ def _context_snapshot() -> tuple[object, ...]:
     )
 
 
-@pytest.fixture(scope="module")
-def diagnosis() -> dict[str, object]:
-    original = _context_snapshot()
-    result = build_diagnosis()
-    assert _context_snapshot() == original
-    return result
-
-
-def test_selection_is_three_bounded_validation_seed_two_cases(
-    diagnosis: dict[str, object],
-) -> None:
-    policy = diagnosis["execution_policy"]
-    cases = diagnosis["cases"]
-    assert policy["partition"] == "VALIDATION"
-    assert policy["seed"] == 2
-    assert policy["case_count"] == policy["maximum_case_count"] == 3
-    assert policy["runs_per_case"] == {
-        "default_context": 1,
-        "altered_context": 1,
-    }
-    assert [item["scenario"] for item in cases] == [
-        "SINGLE_TREND",
-        "V_REVERSAL",
-        "FALSE_BREAK",
-    ]
-    assert all(item["seed"] == 2 for item in cases)
-    assert all(item["input_unchanged"] for item in cases)
-    for forbidden in (
-        "oos_executed",
-        "b_executed",
-        "variants_executed",
-        "replay_executed",
-        "fixed_cutoff_executed",
-        "formal_evidence_written",
-    ):
-        assert policy[forbidden] is False
+def test_selection_is_three_bounded_validation_seed_two_cases() -> None:
+    assert VALIDATION_SEED == 2
+    assert MAXIMUM_CASES == 3
+    assert SELECTED_SCENARIOS == (
+        SyntheticScenarioKind.SINGLE_TREND,
+        SyntheticScenarioKind.V_REVERSAL,
+        SyntheticScenarioKind.FALSE_BREAK,
+    )
 
 
 def test_seed_three_and_more_than_three_cases_are_rejected() -> None:
@@ -234,45 +221,64 @@ def test_minimal_reproduction_is_same_context_stable_and_cross_context_distinct(
     assert _context_snapshot() == original
 
 
-def test_first_numeric_path_and_propagation_are_reproduced(
-    diagnosis: dict[str, object],
+@pytest.mark.parametrize("scenario", SELECTED_SCENARIOS)
+def test_current_core_is_equal_across_default_and_altered_decimal_contexts(
+    scenario: SyntheticScenarioKind,
 ) -> None:
-    for case in diagnosis["cases"]:
-        first = case["first_non_identity_numeric_difference"]
-        assert (
-            first["function"],
-            first["field"],
-            first["frame_index"],
-        ) == ("ResonanceScorer._draft", "freshness_factor", 1)
-        assert first["stored_default_output"] == first["default_output"]
-        assert first["stored_altered_output"] == first["altered_output"]
-        assert first["classification"]["root_operation"] == "division"
-        propagation = case["propagation"]
-        assert propagation["dependency_contribution"]["default"] != (
-            propagation["dependency_contribution"]["altered"]
-        )
-        assert propagation["zone_score"]["default"] != (
-            propagation["zone_score"]["altered"]
-        )
-        assert propagation["score_frame_id"]["default"] != (
-            propagation["score_frame_id"]["altered"]
-        )
-        assert propagation["run_id"]["default"] != (
-            propagation["run_id"]["altered"]
-        )
-        assert propagation["metric_report"]["default_status"] == "PRODUCED"
-        assert (
-            propagation["metric_report"]["altered_status"]
-            == "REJECTED_BEFORE_REPORT"
-        )
-        assert propagation["metric_report"]["altered_metric_report_id"] is None
+    source = build_synthetic_source_input(scenario, VALIDATION_SEED)
+    source_before = source.to_dict()
+    context_before = _context_snapshot()
+
+    default = _run_once(source, _DEFAULT_CONTEXT)
+    altered = _run_once(source, _ALTERED_CONTEXT)
+
+    assert source.to_dict() == source_before
+    assert _context_snapshot() == context_before
+    assert default.run.to_dict() == altered.run.to_dict()
+    assert default.run.run_id == altered.run.run_id
+    assert default.metric_error_type is altered.metric_error_type is None
+    assert default.metric_report is not None
+    assert altered.metric_report is not None
+    assert default.metric_report.to_dict() == altered.metric_report.to_dict()
+    with pytest.raises(
+        DecimalDiagnosisError,
+        match="no non-identity Core numeric divergence found",
+    ):
+        _first_numeric_divergence(default.run, altered.run)
+
+
+def test_no_diagnosis_divergence_is_post_remediation_success() -> None:
+    original = _context_snapshot()
+    with pytest.raises(
+        DecimalDiagnosisError,
+        match="no non-identity Core numeric divergence found",
+    ):
+        build_diagnosis()
+    assert _context_snapshot() == original
+
+
+def test_historical_diagnosis_document_retains_reviewed_root_cause() -> None:
+    text = (
+        ROOT / "docs/validation/core_decimal_context_diagnosis.md"
+    ).read_text(encoding="utf-8")
+    assert "first non-identity numeric divergence" in text
+    assert "`freshness_factor`" in text
+    assert "`ResonanceScorer._draft`" in text
+    assert "`0.9583333333333333333333333333`" in text
+    assert "`0.9583333`" in text
 
 
 def test_rendered_output_is_deterministic_and_has_no_host_or_trading_fields(
-    diagnosis: dict[str, object],
 ) -> None:
-    first = render_diagnosis(diagnosis)
-    second = render_diagnosis(diagnosis)
+    current_status = {
+        "diagnosis_version": DIAGNOSIS_VERSION,
+        "current_core_status": "NO_NON_IDENTITY_NUMERIC_DIVERGENCE",
+        "historical_root_cause_document": (
+            "docs/validation/core_decimal_context_diagnosis.md"
+        ),
+    }
+    first = render_diagnosis(current_status)
+    second = render_diagnosis(current_status)
     assert first == second
     assert "D:\\" not in first
     assert "msa-market-structure-c008c-h2-diag" not in first
