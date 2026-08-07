@@ -199,12 +199,10 @@ def write_c008c_authority_evidence(
 
     base = _resolve_root(root, ExperimentEvidenceError)
     evidence_dir = base / "docs/validation/evidence"
-    if not check and (
-        evidence_dir / "c008c_h2_decimal_remediation.json"
-    ).is_file():
+    if not check:
         raise ExperimentEvidenceError(
             "historical C-008C v1 Evidence cannot be regenerated after "
-            "a versioned remediation"
+            "the reviewed H2 remediation"
         )
     try:
         baseline = core_experiment_baseline()
