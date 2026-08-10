@@ -25,6 +25,7 @@ from .contracts import (
     ResonanceFrame,
     ResonanceFrameHistory,
 )
+from .decimal_arithmetic import canonical_decimal_boundary
 from .errors import (
     ResonanceScoringConfigurationError,
     ResonanceScoringEngineError,
@@ -215,6 +216,7 @@ def _context_key(context: ResonanceContext) -> tuple[str, str, int, int]:
     )
 
 
+@canonical_decimal_boundary
 def _elapsed_seconds(delta: timedelta) -> Decimal:
     microseconds = (
         delta.days * 86_400_000_000
@@ -224,6 +226,7 @@ def _elapsed_seconds(delta: timedelta) -> Decimal:
     return Decimal(microseconds) / Decimal("1000000")
 
 
+@canonical_decimal_boundary
 def _range_gap(left: PriceRange, right: PriceRange) -> Decimal:
     if left.high < right.low:
         return right.low - left.high
@@ -589,6 +592,7 @@ class ResonanceScoringConfig:
             "evidence context is missing from scoring context_weights"
         )
 
+    @canonical_decimal_boundary
     def effective_tolerance(self, reference_price: Decimal) -> Decimal:
         if self.tolerance_mode is ResonanceToleranceMode.ABSOLUTE:
             if self.absolute_tolerance is None:
@@ -602,6 +606,7 @@ class ResonanceScoringConfig:
             )
         return reference_price * self.reference_tolerance_fraction
 
+    @canonical_decimal_boundary
     def distance_horizon(self, reference_price: Decimal) -> Decimal:
         if self.distance_horizon_mode is ResonanceToleranceMode.ABSOLUTE:
             if self.absolute_distance_horizon is None:
@@ -804,6 +809,7 @@ class ResonanceEvidenceContribution:
     dependency_component_id: str
     schema_version: int = SCHEMA_VERSION
 
+    @canonical_decimal_boundary
     def __post_init__(self) -> None:
         name = type(self).__name__
         _schema(self.schema_version, name, ResonanceScoringEngineError)
@@ -921,6 +927,7 @@ class ResonanceDependencyComponent:
     adjusted_component_score: Decimal
     schema_version: int = SCHEMA_VERSION
 
+    @canonical_decimal_boundary
     def __post_init__(self) -> None:
         name = type(self).__name__
         _schema(self.schema_version, name, ResonanceScoringEngineError)
@@ -1138,6 +1145,7 @@ class ResonanceZoneExplanation:
     assumptions: tuple[str, ...]
     schema_version: int = SCHEMA_VERSION
 
+    @canonical_decimal_boundary
     def __post_init__(self) -> None:
         name = type(self).__name__
         _schema(self.schema_version, name, ResonanceScoringEngineError)
@@ -1373,6 +1381,7 @@ class ResonanceZone:
     provenance: ProvenanceRef
     schema_version: int = SCHEMA_VERSION
 
+    @canonical_decimal_boundary
     def __post_init__(self) -> None:
         name = type(self).__name__
         _schema(self.schema_version, name, ResonanceScoringEngineError)
@@ -1782,6 +1791,7 @@ class ResonanceScoreFrame:
     provenance: ProvenanceRef
     schema_version: int = SCHEMA_VERSION
 
+    @canonical_decimal_boundary
     def __post_init__(self) -> None:
         name = type(self).__name__
         _schema(self.schema_version, name, ResonanceScoringEngineError)
@@ -1888,6 +1898,7 @@ class ResonanceScoreFrame:
         }
 
     @classmethod
+    @canonical_decimal_boundary
     def from_dict(cls, payload: Mapping[str, Any]) -> ResonanceScoreFrame:
         names = {field.name for field in fields(cls)} - {"schema_version"}
         data = _exact_payload(payload, cls.__name__, names)
@@ -2075,6 +2086,7 @@ def _shared_component_families(
     return tuple(sorted(shared))
 
 
+@canonical_decimal_boundary
 def _price_relation_and_distance(
     side: BoundarySide, price_range: PriceRange, price: Decimal
 ) -> tuple[ResonancePriceRelation, Decimal]:
@@ -2094,6 +2106,7 @@ def _price_relation_and_distance(
     )
 
 
+@canonical_decimal_boundary
 def _validate_zone_against_frame(
     zone: ResonanceZone,
     evidence_by_id: Mapping[str, ResonanceEvidence],

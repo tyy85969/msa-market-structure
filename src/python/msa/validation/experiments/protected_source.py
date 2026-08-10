@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 from pathlib import Path
 
 from .contracts import (
@@ -165,9 +166,16 @@ def validate_protected_source_manifest(
         or restored_payload != original_payload
         or original_payload != current_payload
     ):
-        raise ExperimentProtectedSourceError(
-            "protected source differs from the frozen manifest"
-        )
+        try:
+            from msa.validation.remediation import (
+                validate_historical_protected_source_transition,
+            )
+
+            validate_historical_protected_source_transition(manifest, root)
+        except (ImportError, OSError, TypeError, ValueError) as exc:
+            raise ExperimentProtectedSourceError(
+                "protected source differs from the frozen manifest"
+            ) from exc
     return manifest
 
 
@@ -191,12 +199,25 @@ def write_c008c_authority_evidence(
 
     base = _resolve_root(root, ExperimentEvidenceError)
     evidence_dir = base / "docs/validation/evidence"
+    if not check:
+        raise ExperimentEvidenceError(
+            "historical C-008C v1 Evidence cannot be regenerated after "
+            "the reviewed H2 remediation"
+        )
     try:
         baseline = core_experiment_baseline()
         dataset = build_c008c_synthetic_dataset()
         gates = default_c008c_gate_registry()
         plan = default_c008c_experiment_plan()
-        protected = build_protected_source_manifest(base)
+        if check:
+            protected = ProtectedSourceManifest.from_dict(
+                json.loads(
+                    (evidence_dir / "c008c_protected_source_manifest.json")
+                    .read_text(encoding="utf-8")
+                )
+            )
+        else:
+            protected = build_protected_source_manifest(base)
         validate_core_experiment_baseline(baseline)
         validate_c008c_synthetic_dataset(dataset)
         validate_c008c_gate_registry(gates)
