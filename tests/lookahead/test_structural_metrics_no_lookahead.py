@@ -1,20 +1,30 @@
 from copy import deepcopy
+from datetime import datetime, timedelta, timezone
 from decimal import getcontext
 
 import pytest
 
 from msa.domain import BoundarySide
 from msa.research.active_box import ActiveBoxEventType
-from msa.research.msa_core import replay_msa_core_run
+from msa.research.msa_core import MSACorePipeline, replay_msa_core_run
 from msa.research.resonance import ResonanceClass
 from msa.validation import (
+    CausalAuditor,
     MetricInputError,
     MetricEventKind,
     MetricObservationStatus,
+    StructuralMetricEvaluator,
     ValidationMetricName,
     evaluate_structural_metrics,
     iter_structural_metric_observations,
 )
+from msa.validation.contracts import SyntheticScenarioKind
+from msa.validation.experiments import (
+    build_synthetic_source_input,
+    core_experiment_baseline,
+)
+from msa.validation.experiments.execution.cutoff import _truncate_source
+from msa.validation.experiments.identity import digest
 from msa.validation.metrics.matching import match_resonance_outcomes
 from tests.research.msa_core.fixtures import pipeline, source_input
 from tests.validation.causal_audit.fixtures import valid_prefix_pair
@@ -40,6 +50,12 @@ def component_payload(report, name: str) -> tuple[dict[str, object], ...]:
     return tuple(
         item.to_dict() for item in getattr(report, name)
     )
+
+
+def object_payloads(
+    values: tuple[object, ...],
+) -> tuple[dict[str, object], ...]:
+    return tuple(item.to_dict() for item in values)
 
 
 def test_batch_and_default_replay_reports_are_identical() -> None:
@@ -69,6 +85,104 @@ def test_future_append_preserves_complete_causal_payload_at_cutoff() -> None:
     assert left.source_run_id != right.source_run_id
     assert left.metric_report_id != right.metric_report_id
     assert left.provenance != right.provenance
+
+
+def test_future_observed_break_event_is_cutoff_local() -> None:
+    baseline = core_experiment_baseline()
+    source = build_synthetic_source_input(
+        SyntheticScenarioKind.FALSE_BREAK, 0
+    )
+    assert digest(source.to_dict()) == (
+        "ab0a75e2fbf2d40176b9eb733e076e962cd1ddb339f501a87cc45f95695fb997"
+    )
+    pipeline = MSACorePipeline(baseline.core_config_snapshot)
+    extended = pipeline.run(source)
+    cutoff = extended.processing_times[9]
+    assert cutoff == datetime(2026, 1, 1, 9, tzinfo=timezone.utc)
+    prefix_source = _truncate_source(source, cutoff)
+    prefix = pipeline.run(prefix_source)
+
+    auditor = CausalAuditor()
+    assert auditor.compare_shared_asof(
+        prefix, extended, cutoff + timedelta(microseconds=1)
+    ).passed
+    assert auditor.compare_prefix(prefix, extended).passed
+
+    extended_frames = tuple(
+        item for item in extended.frame_bundles if item.as_of_time <= cutoff
+    )
+    extended_active_events = tuple(
+        item
+        for item in extended.active_box_history.events
+        if item.event_confirm_time <= cutoff
+    )
+    extended_frozen_boxes = tuple(
+        item
+        for item in extended.active_box_history.frozen_boxes
+        if item.active_box.confirm_time <= cutoff
+    )
+    assert object_payloads(prefix.frame_bundles) == object_payloads(
+        extended_frames
+    )
+    assert object_payloads(
+        prefix.active_box_history.events
+    ) == object_payloads(extended_active_events)
+    assert object_payloads(
+        prefix.active_box_history.frozen_boxes
+    ) == object_payloads(extended_frozen_boxes)
+
+    evaluator = StructuralMetricEvaluator(baseline.metric_config_snapshot)
+    prefix_metric = evaluator.evaluate(prefix)
+    extended_at_cutoff = evaluator.evaluate(extended, cutoff)
+    assert component_payload(prefix_metric, "events") == component_payload(
+        extended_at_cutoff, "events"
+    )
+    assert len(prefix_metric.events) == 5
+
+    break_event_id = (
+        "structural-metric-event-v1-"
+        "a15a92ffbf7e73abfd204b9a54cf40edfcd8f391b582c35e9effc01ba9f3aa8e"
+    )
+    assert break_event_id not in {
+        item.metric_event_id for item in extended_at_cutoff.events
+    }
+    first_observed = source.lifecycle_history.final_snapshot.as_of_time
+    assert first_observed == datetime(
+        2026, 1, 3, 16, tzinfo=timezone.utc
+    )
+    assert first_observed > cutoff
+    extended_at_first_observation = evaluator.evaluate(
+        extended, first_observed
+    )
+    visible = tuple(
+        item
+        for item in extended_at_first_observation.events
+        if item.metric_event_id == break_event_id
+    )
+    assert len(visible) == 1
+    assert visible[0].kind is MetricEventKind.BREAK_CONFIRMATION
+    assert visible[0].event_confirm_time == cutoff
+    assert visible[0].first_observed_as_of_time == first_observed
+    facts = dict(item.split("=", 1) for item in visible[0].facts)
+    lifecycle_event_id = facts["lifecycle_break_event_id"]
+    assert all(
+        item.event_id != lifecycle_event_id
+        for item in prefix_source.lifecycle_history.events
+    )
+    first_snapshot = next(
+        snapshot
+        for snapshot in source.lifecycle_history.snapshots
+        if any(
+            item.event_id == lifecycle_event_id for item in snapshot.events
+        )
+    )
+    first_state = next(
+        item
+        for item in first_snapshot.states
+        if item.subject_ref.object_id == facts["subject_id"]
+    )
+    assert first_snapshot.as_of_time == first_observed
+    assert first_state.state_id in visible[0].source_object_ids
 
 
 def test_lifecycle_and_timeframe_state_future_append_are_inert_at_cutoff() -> None:
