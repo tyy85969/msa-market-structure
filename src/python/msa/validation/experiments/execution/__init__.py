@@ -34,6 +34,7 @@ from .contracts_v2 import (
     B_V2_EXECUTION_SEMANTICS,
     B_V2_SCHEMA_VERSION,
     C008CBV2ExecutionContract,
+    C008CBV2RunReport,
     DegenerationEvidenceScope,
     DeterminismEvidenceKind,
     ExperimentDegenerationFindingV2,
@@ -60,6 +61,13 @@ from .evidence import (
     verify_c008c_b_report,
     write_c008c_b_evidence,
 )
+from .evidence_v2 import (
+    B_V2_EXECUTION_CONTRACT_PATH,
+    B_V2_REPORT_PATH,
+    b_v2_evidence_sha256,
+    check_existing_c008c_b_v2_evidence,
+    write_c008c_b_v2_evidence,
+)
 from .manifest import (
     build_c008c_b_execution_manifest,
     load_c008c_b_authority,
@@ -70,10 +78,20 @@ from .report import (
     run_c008c_b_dev_validation,
     validate_c008c_b_report,
 )
+from .report_v2 import (
+    build_c008c_b_v2_report,
+    derive_c008c_b_v2_stage,
+    run_c008c_b_v2_dev_validation,
+    validate_c008c_b_v2_execution_contract,
+    validate_c008c_b_v2_execution_schedule,
+    validate_c008c_b_v2_report,
+)
 
 __all__ = [
     "CORE_REFERENCE_COMMIT",
     "B_V2_EXECUTION_SEMANTICS",
+    "B_V2_EXECUTION_CONTRACT_PATH",
+    "B_V2_REPORT_PATH",
     "B_V2_SCHEMA_VERSION",
     "FROZEN_EXECUTION_BASE_COMMIT",
     "REPOSITORY_BASE_COMMIT",
@@ -92,6 +110,7 @@ __all__ = [
     "C008CBRunReport",
     "C008CBStageStatus",
     "C008CBV2ExecutionContract",
+    "C008CBV2RunReport",
     "C008CExperimentRunner",
     "DegenerationStatus",
     "DegenerationEvidenceScope",
@@ -123,11 +142,20 @@ __all__ = [
     "ReplayComparisonStatus",
     "build_c008c_b_execution_manifest",
     "build_c008c_b_v2_execution_contract",
+    "build_c008c_b_v2_report",
+    "b_v2_evidence_sha256",
+    "check_existing_c008c_b_v2_evidence",
     "check_existing_c008c_b_evidence",
     "load_c008c_b_authority",
     "run_c008c_b_dev_validation",
+    "run_c008c_b_v2_dev_validation",
+    "derive_c008c_b_v2_stage",
     "validate_c008c_b_execution_manifest",
     "validate_c008c_b_report",
+    "validate_c008c_b_v2_execution_contract",
+    "validate_c008c_b_v2_execution_schedule",
+    "validate_c008c_b_v2_report",
     "verify_c008c_b_report",
     "write_c008c_b_evidence",
+    "write_c008c_b_v2_evidence",
 ]
