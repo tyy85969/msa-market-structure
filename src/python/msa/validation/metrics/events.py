@@ -328,6 +328,8 @@ def _break_events(
     first_observed: dict[str, datetime] = {}
     state_at_first_observation: dict[str, object] = {}
     for snapshot in history.snapshots:
+        if snapshot.as_of_time > cutoff:
+            break
         for event in snapshot.events:
             if event.event_id in first_observed:
                 continue
@@ -357,9 +359,7 @@ def _break_events(
             continue
         state = state_at_first_observation.get(event.event_id)
         if state is None:
-            raise MetricEventError(
-                "BROKEN event subject is absent from LifecycleHistory"
-            )
+            continue
         boundary = state.subject_ref
         side = event.effective_boundary_side
         anchor = (
