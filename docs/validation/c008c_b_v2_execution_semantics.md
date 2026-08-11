@@ -85,14 +85,21 @@ Linux checkouts. This authority does not replace the historical execution
 Manifest or the reviewed Protected Source Manifest; the Run Report binds all
 three IDs for their separate responsibilities.
 
-The formal runner validates committed authority against current worktree bytes
-before its first Primary executor call. It retains that exact manifest as
-`source_before`, binds its ID in the Run Report, rebuilds `source_after` after
+The committed authority is the exact Git blob at
+`HEAD:docs/validation/evidence/c008c_b_v2_execution_source_manifest.json`, not
+an unanchored worktree JSON file. The loader uses a fixed, read-only Git command
+with no shell, requires the worktree authority bytes to equal that HEAD blob,
+parses only the HEAD bytes, and then requires reconstructed current source to
+equal the HEAD authority.
+
+The formal runner performs this Git-anchored validation before its first
+Primary executor call. It retains that exact manifest as `source_before`, binds
+its ID in the Run Report, repeats the complete Git-anchored validation after
 Primary, Replay, fixed-cutoff, degeneration, Gates, and report assembly, and
-fails the whole run unless the two manifests are identical. The outcome writer
-performs the same preflight and never regenerates or updates source authority.
-`--check-existing` validates canonical source-authority bytes, current source,
-and the Run Report binding without executing an outcome.
+then requires `source_before == source_after`. The outcome writer performs the
+same preflight and never regenerates or updates source authority.
+`--check-existing` validates the HEAD blob, worktree authority, current source,
+and Run Report binding without executing an outcome.
 
 B-v2 Evidence is append-only at these independent paths:
 

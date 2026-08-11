@@ -37,7 +37,6 @@ from .replay import run_replay_comparisons
 from .report import _partition_summaries
 from .runner import run_primary_execution_v2
 from .source_authority_v2 import (
-    build_c008c_b_v2_execution_source_manifest,
     validate_c008c_b_v2_execution_source_authority,
     validate_c008c_b_v2_execution_source_stability,
 )
@@ -450,7 +449,7 @@ def run_c008c_b_v2_dev_validation(
         root,
         execution_source_manifest=source_before,
     )
-    source_after = build_c008c_b_v2_execution_source_manifest(root)
+    source_after = validate_c008c_b_v2_execution_source_authority(root)
     validate_c008c_b_v2_execution_source_stability(
         source_before, source_after
     )

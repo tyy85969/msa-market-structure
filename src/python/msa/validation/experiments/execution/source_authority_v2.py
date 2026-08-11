@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 from pathlib import Path
+import subprocess
 
 from ..identity import canonical_json_bytes
 from .contracts_v2 import (
@@ -21,6 +23,10 @@ B_V2_EXECUTION_SOURCE_MANIFEST_PATH = Path(
 )
 _PACKAGE_ROOT = Path("src/python/msa")
 _FORMAL_CLI = Path("tools/validation/generate_c008c_b_v2_results.py")
+_GIT_TIMEOUT_SECONDS = 10
+_HEAD_AUTHORITY_SPEC = (
+    f"HEAD:{B_V2_EXECUTION_SOURCE_MANIFEST_PATH.as_posix()}"
+)
 
 
 def _root(root: Path | None) -> Path:
@@ -88,6 +94,65 @@ def build_c008c_b_v2_execution_source_manifest(
     )
 
 
+def _git_stdout(
+    base: Path,
+    arguments: tuple[str, ...],
+    label: str,
+) -> bytes:
+    command = ("git", "-C", str(base), *arguments)
+    environment = os.environ.copy()
+    for name in (
+        "GIT_DIR",
+        "GIT_WORK_TREE",
+        "GIT_INDEX_FILE",
+        "GIT_OBJECT_DIRECTORY",
+        "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+    ):
+        environment.pop(name, None)
+    try:
+        completed = subprocess.run(
+            command,
+            shell=False,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            env=environment,
+            check=False,
+            timeout=_GIT_TIMEOUT_SECONDS,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise C008CBPreflightError(
+            f"Git HEAD authority {label} failed"
+        ) from exc
+    if completed.returncode != 0:
+        raise C008CBPreflightError(
+            f"Git HEAD authority {label} failed"
+        )
+    return completed.stdout
+
+
+def _head_authority_bytes(base: Path) -> bytes:
+    inside = _git_stdout(
+        base,
+        ("rev-parse", "--is-inside-work-tree"),
+        "worktree check",
+    )
+    prefix = _git_stdout(
+        base,
+        ("rev-parse", "--show-prefix"),
+        "repository-root check",
+    )
+    if inside.strip() != b"true" or prefix.strip():
+        raise C008CBPreflightError(
+            "formal B-v2 root must be the Git worktree root"
+        )
+    return _git_stdout(
+        base,
+        ("cat-file", "blob", _HEAD_AUTHORITY_SPEC),
+        "authority blob read",
+    )
+
+
 def load_committed_c008c_b_v2_execution_source_manifest(
     root: Path | None = None,
 ) -> C008CBV2ExecutionSourceManifest:
@@ -96,15 +161,28 @@ def load_committed_c008c_b_v2_execution_source_manifest(
     base = _root(root)
     path = base / B_V2_EXECUTION_SOURCE_MANIFEST_PATH
     try:
-        raw = path.read_bytes()
-        payload = json.loads(raw.decode("utf-8"))
+        head_raw = _head_authority_bytes(base)
+        worktree_raw = path.read_bytes()
     except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
         raise C008CBPreflightError(
             "committed B-v2 execution source manifest is missing or invalid"
         ) from exc
-    if not isinstance(payload, dict) or raw != canonical_json_bytes(payload):
+    if worktree_raw != head_raw:
         raise C008CBPreflightError(
-            "committed B-v2 execution source manifest is not canonical"
+            "worktree B-v2 execution source authority differs from Git HEAD"
+        )
+    try:
+        payload = json.loads(head_raw.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise C008CBPreflightError(
+            "Git HEAD B-v2 execution source authority is invalid"
+        ) from exc
+    if (
+        not isinstance(payload, dict)
+        or head_raw != canonical_json_bytes(payload)
+    ):
+        raise C008CBPreflightError(
+            "Git HEAD B-v2 execution source manifest is not canonical"
         )
     try:
         manifest = C008CBV2ExecutionSourceManifest.from_dict(payload)
@@ -112,9 +190,9 @@ def load_committed_c008c_b_v2_execution_source_manifest(
         raise C008CBPreflightError(
             "committed B-v2 execution source manifest contract is invalid"
         ) from exc
-    if raw != canonical_json_bytes(manifest.to_dict()):
+    if head_raw != canonical_json_bytes(manifest.to_dict()):
         raise C008CBPreflightError(
-            "committed B-v2 execution source manifest byte mismatch"
+            "Git HEAD B-v2 execution source manifest byte mismatch"
         )
     return manifest
 
