@@ -76,6 +76,24 @@ frozen Gate results. A required pre-OOS failure yields
 `BLOCKED_BEFORE_OOS`; the ready status is permitted only when all non-OOS
 requirements have their frozen PASS/partial/deferred statuses.
 
+Formal execution has an additional, independent schema-2 source authority at
+`docs/validation/evidence/c008c_b_v2_execution_source_manifest.json`. It
+canonically binds the ordered exact bytes of every `src/python/msa/**/*.py`
+file plus `tools/validation/generate_c008c_b_v2_results.py`. Those paths use
+repository-enforced LF bytes so the authority is identical in Windows and
+Linux checkouts. This authority does not replace the historical execution
+Manifest or the reviewed Protected Source Manifest; the Run Report binds all
+three IDs for their separate responsibilities.
+
+The formal runner validates committed authority against current worktree bytes
+before its first Primary executor call. It retains that exact manifest as
+`source_before`, binds its ID in the Run Report, rebuilds `source_after` after
+Primary, Replay, fixed-cutoff, degeneration, Gates, and report assembly, and
+fails the whole run unless the two manifests are identical. The outcome writer
+performs the same preflight and never regenerates or updates source authority.
+`--check-existing` validates canonical source-authority bytes, current source,
+and the Run Report binding without executing an outcome.
+
 B-v2 Evidence is append-only at these independent paths:
 
 - `docs/validation/evidence/c008c_b_v2_execution_contract.json`

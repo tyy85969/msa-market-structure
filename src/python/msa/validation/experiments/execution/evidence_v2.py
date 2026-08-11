@@ -19,6 +19,10 @@ from .report_v2 import (
     validate_c008c_b_v2_execution_contract,
     validate_c008c_b_v2_report,
 )
+from .source_authority_v2 import (
+    B_V2_EXECUTION_SOURCE_MANIFEST_PATH,
+    validate_c008c_b_v2_execution_source_authority,
+)
 
 
 B_V2_EXECUTION_CONTRACT_PATH = Path(
@@ -38,6 +42,9 @@ _HISTORICAL_PATHS = (
         "c008c_h3_metric_fixed_cutoff_transition.json"
     ),
 )
+_IMMUTABLE_AUTHORITY_PATHS = _HISTORICAL_PATHS + (
+    B_V2_EXECUTION_SOURCE_MANIFEST_PATH,
+)
 
 
 def _root(root: Path | None) -> Path:
@@ -55,13 +62,15 @@ def _evidence_paths(base: Path) -> tuple[Path, Path]:
     evidence_dir = (base / "docs/validation/evidence").resolve()
     contract_path = (base / B_V2_EXECUTION_CONTRACT_PATH).resolve()
     report_path = (base / B_V2_REPORT_PATH).resolve()
-    historical = {(base / item).resolve() for item in _HISTORICAL_PATHS}
+    reserved = {
+        (base / item).resolve() for item in _IMMUTABLE_AUTHORITY_PATHS
+    }
     if (
         contract_path.parent != evidence_dir
         or report_path.parent != evidence_dir
         or contract_path == report_path
-        or contract_path in historical
-        or report_path in historical
+        or contract_path in reserved
+        or report_path in reserved
         or contract_path.name != "c008c_b_v2_execution_contract.json"
         or report_path.name != "c008c_b_v2_dev_validation_report.json"
     ):
@@ -73,10 +82,13 @@ def _evidence_paths(base: Path) -> tuple[Path, Path]:
 
 def _frozen_bytes(base: Path) -> dict[Path, bytes]:
     try:
-        return {item: (base / item).read_bytes() for item in _HISTORICAL_PATHS}
+        return {
+            item: (base / item).read_bytes()
+            for item in _IMMUTABLE_AUTHORITY_PATHS
+        }
     except OSError as exc:
         raise C008CBEvidenceError(
-            "historical authority cannot be snapshotted"
+            "immutable authority cannot be snapshotted"
         ) from exc
 
 
@@ -89,11 +101,11 @@ def _assert_frozen_bytes(base: Path, expected: dict[Path, bytes]) -> None:
         )
     except OSError as exc:
         raise C008CBEvidenceError(
-            "historical authority cannot be rechecked"
+            "immutable authority cannot be rechecked"
         ) from exc
     if changed:
         raise C008CBEvidenceError(
-            "B-v2 operation changed historical authority: "
+            "B-v2 operation changed immutable authority: "
             + ", ".join(item.as_posix() for item in changed)
         )
 
@@ -115,6 +127,7 @@ def check_existing_c008c_b_v2_evidence(
     """Verify committed v2 Evidence without Core/Replay/cutoff execution."""
 
     base = _root(root)
+    validate_c008c_b_v2_execution_source_authority(base)
     contract_path, report_path = _evidence_paths(base)
     contract_raw, contract_payload = _read_payload(
         contract_path, "B-v2 execution contract Evidence"
@@ -171,6 +184,7 @@ def write_c008c_b_v2_evidence(
     frozen = _frozen_bytes(base)
     contract_path, report_path = _evidence_paths(base)
     try:
+        validate_c008c_b_v2_execution_source_authority(base)
         manifest = build_c008c_b_execution_manifest(base)
         contract = build_c008c_b_v2_execution_contract(manifest)
         validate_c008c_b_v2_execution_contract(contract, manifest)

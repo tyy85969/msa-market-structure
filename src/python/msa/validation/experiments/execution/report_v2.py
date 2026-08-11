@@ -15,6 +15,7 @@ from .contracts_v2 import (
     B_V2_EXECUTION_SEMANTICS,
     B_V2_SCHEMA_VERSION,
     C008CBV2ExecutionContract,
+    C008CBV2ExecutionSourceManifest,
     C008CBV2RunReport,
     build_c008c_b_v2_execution_contract,
     v2_payload_id,
@@ -35,6 +36,11 @@ from .manifest import (
 from .replay import run_replay_comparisons
 from .report import _partition_summaries
 from .runner import run_primary_execution_v2
+from .source_authority_v2 import (
+    build_c008c_b_v2_execution_source_manifest,
+    validate_c008c_b_v2_execution_source_authority,
+    validate_c008c_b_v2_execution_source_stability,
+)
 
 
 _DEFERRED_GATE_CODES = frozenset(
@@ -221,6 +227,13 @@ def validate_c008c_b_v2_report(
         raise C008CBReportError(
             "B-v2 report reviewed source authority mismatch"
         )
+    execution_source = validate_c008c_b_v2_execution_source_authority(root)
+    if report.execution_source_manifest_id != (
+        execution_source.source_manifest_id
+    ):
+        raise C008CBReportError(
+            "B-v2 report execution source authority mismatch"
+        )
     _validate_report_schedule(report, manifest)
     expected_stage = derive_c008c_b_v2_stage(report.gate_results, root)
     if report.stage_status is not expected_stage:
@@ -290,11 +303,21 @@ def build_c008c_b_v2_report(
     global_degeneration_evidence: object,
     gate_results: tuple,
     root: Path | None = None,
+    *,
+    execution_source_manifest: C008CBV2ExecutionSourceManifest | None = None,
 ) -> C008CBV2RunReport:
     """Assemble a canonical v2 report from already-produced formal evidence."""
 
     validate_c008c_b_v2_execution_schedule(manifest, contract, root)
     reviewed_source = build_protected_source_manifest(root)
+    if execution_source_manifest is None:
+        execution_source_manifest = (
+            validate_c008c_b_v2_execution_source_authority(root)
+        )
+    if not isinstance(
+        execution_source_manifest, C008CBV2ExecutionSourceManifest
+    ):
+        raise C008CBReportError("B-v2 execution source manifest is required")
     stage = derive_c008c_b_v2_stage(gate_results, root)
     kwargs = {
         "execution_semantics": B_V2_EXECUTION_SEMANTICS,
@@ -302,6 +325,9 @@ def build_c008c_b_v2_report(
         "historical_execution_manifest_id": manifest.execution_manifest_id,
         "reviewed_protected_source_manifest_id": (
             reviewed_source.protected_source_manifest_id
+        ),
+        "execution_source_manifest_id": (
+            execution_source_manifest.source_manifest_id
         ),
         "case_results": case_results,
         "same_context_comparisons": same_context_comparisons,
@@ -327,6 +353,9 @@ def build_c008c_b_v2_report(
         ],
         "reviewed_protected_source_manifest_id": kwargs[
             "reviewed_protected_source_manifest_id"
+        ],
+        "execution_source_manifest_id": kwargs[
+            "execution_source_manifest_id"
         ],
         "case_results": [item.to_dict() for item in case_results],
         "same_context_comparisons": [
@@ -372,6 +401,7 @@ def run_c008c_b_v2_dev_validation(
 ) -> C008CBV2RunReport:
     """Run the one formal DEV+VALIDATION B-v2 orchestration; never OOS."""
 
+    source_before = validate_c008c_b_v2_execution_source_authority(root)
     manifest = build_c008c_b_execution_manifest(root)
     contract = build_c008c_b_v2_execution_contract(manifest)
     validate_c008c_b_v2_execution_schedule(manifest, contract, root)
@@ -418,6 +448,11 @@ def run_c008c_b_v2_dev_validation(
         global_evidence,
         gates,
         root,
+        execution_source_manifest=source_before,
+    )
+    source_after = build_c008c_b_v2_execution_source_manifest(root)
+    validate_c008c_b_v2_execution_source_stability(
+        source_before, source_after
     )
     return validate_c008c_b_v2_report(report, contract, manifest, root)
 

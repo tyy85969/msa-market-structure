@@ -118,6 +118,122 @@ def _identity(
 
 
 @dataclass(frozen=True, slots=True)
+class C008CBV2ExecutionSourceFile:
+    """One exact worktree byte binding in the formal B-v2 source lock."""
+
+    relative_path: str
+    sha256: str
+    schema_version: int = B_V2_SCHEMA_VERSION
+
+    def __post_init__(self) -> None:
+        error = C008CBManifestError
+        _schema(self.schema_version, type(self).__name__, error)
+        path = _text(self.relative_path, "relative_path", error)
+        if (
+            "\\" in path
+            or path.startswith("/")
+            or ".." in path.split("/")
+            or not (
+                (path.startswith("src/python/msa/") and path.endswith(".py"))
+                or path
+                == "tools/validation/generate_c008c_b_v2_results.py"
+            )
+        ):
+            raise error("execution source relative_path is outside frozen scope")
+        sha256 = _text(self.sha256, "sha256", error)
+        if len(sha256) != 64 or any(
+            char not in "0123456789abcdef" for char in sha256
+        ):
+            raise error("execution source sha256 must be lowercase hex")
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "relative_path": self.relative_path,
+            "sha256": self.sha256,
+            "schema_version": self.schema_version,
+        }
+
+    @classmethod
+    def from_dict(cls, payload: Mapping[str, Any]) -> Self:
+        data = _exact(payload, cls, C008CBManifestError)
+        try:
+            return cls(
+                relative_path=data["relative_path"],
+                sha256=data["sha256"],
+                schema_version=data["schema_version"],
+            )
+        except (KeyError, TypeError, ValueError) as exc:
+            raise C008CBManifestError(
+                "invalid serialized B-v2 execution source file"
+            ) from exc
+
+
+@dataclass(frozen=True, slots=True)
+class C008CBV2ExecutionSourceManifest:
+    """Owner-reviewed exact source bytes for one future formal B-v2 run."""
+
+    source_manifest_id: str
+    files: tuple[C008CBV2ExecutionSourceFile, ...]
+    file_count: int
+    schema_version: int = B_V2_SCHEMA_VERSION
+
+    _PREFIX: ClassVar[str] = (
+        "c008c-b-v2-execution-source-manifest-v2-"
+    )
+
+    def __post_init__(self) -> None:
+        error = C008CBManifestError
+        _schema(self.schema_version, type(self).__name__, error)
+        _text(self.source_manifest_id, "source_manifest_id", error)
+        if (
+            not isinstance(self.files, tuple)
+            or not self.files
+            or any(
+                not isinstance(item, C008CBV2ExecutionSourceFile)
+                for item in self.files
+            )
+        ):
+            raise error("execution source files must be a non-empty tuple")
+        paths = tuple(item.relative_path for item in self.files)
+        if paths != tuple(sorted(paths)) or len(set(paths)) != len(paths):
+            raise error("execution source files must be unique and ordered")
+        if type(self.file_count) is not int or self.file_count != len(self.files):
+            raise error("execution source file_count mismatch")
+        _identity(
+            self,
+            id_field="source_manifest_id",
+            prefix=self._PREFIX,
+            error=error,
+        )
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "source_manifest_id": self.source_manifest_id,
+            "files": [item.to_dict() for item in self.files],
+            "file_count": self.file_count,
+            "schema_version": self.schema_version,
+        }
+
+    @classmethod
+    def from_dict(cls, payload: Mapping[str, Any]) -> Self:
+        data = _exact(payload, cls, C008CBManifestError)
+        try:
+            return cls(
+                source_manifest_id=data["source_manifest_id"],
+                files=tuple(
+                    C008CBV2ExecutionSourceFile.from_dict(item)
+                    for item in data["files"]
+                ),
+                file_count=data["file_count"],
+                schema_version=data["schema_version"],
+            )
+        except (KeyError, TypeError, ValueError) as exc:
+            raise C008CBManifestError(
+                "invalid serialized B-v2 execution source manifest"
+            ) from exc
+
+
+@dataclass(frozen=True, slots=True)
 class C008CBV2ExecutionContract:
     execution_contract_id: str
     execution_semantics: str
@@ -868,6 +984,7 @@ class C008CBV2RunReport:
     execution_contract_id: str
     historical_execution_manifest_id: str
     reviewed_protected_source_manifest_id: str
+    execution_source_manifest_id: str
     case_results: tuple[ExperimentCaseResult, ...]
     same_context_comparisons: tuple[ExperimentDeterminismComparisonV2, ...]
     decimal_context_comparisons: tuple[
@@ -898,6 +1015,7 @@ class C008CBV2RunReport:
             "execution_contract_id",
             "historical_execution_manifest_id",
             "reviewed_protected_source_manifest_id",
+            "execution_source_manifest_id",
         ):
             _text(getattr(self, name), name, error)
         expected_objects = (
@@ -1051,6 +1169,7 @@ class C008CBV2RunReport:
             "reviewed_protected_source_manifest_id": (
                 self.reviewed_protected_source_manifest_id
             ),
+            "execution_source_manifest_id": self.execution_source_manifest_id,
             "case_results": [item.to_dict() for item in self.case_results],
             "same_context_comparisons": [
                 item.to_dict() for item in self.same_context_comparisons
@@ -1097,6 +1216,9 @@ class C008CBV2RunReport:
                 ],
                 reviewed_protected_source_manifest_id=data[
                     "reviewed_protected_source_manifest_id"
+                ],
+                execution_source_manifest_id=data[
+                    "execution_source_manifest_id"
                 ],
                 case_results=tuple(
                     ExperimentCaseResult.from_dict(item)
@@ -1165,6 +1287,8 @@ __all__ = [
     "B_V2_EXECUTION_SEMANTICS",
     "B_V2_SCHEMA_VERSION",
     "C008CBV2ExecutionContract",
+    "C008CBV2ExecutionSourceFile",
+    "C008CBV2ExecutionSourceManifest",
     "C008CBV2RunReport",
     "DegenerationEvidenceScope",
     "DeterminismEvidenceKind",

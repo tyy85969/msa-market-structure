@@ -7,21 +7,24 @@ import shutil
 
 import pytest
 
-from msa.validation.experiments import build_protected_source_manifest
 from msa.validation.experiments.execution import (
     B_V2_EXECUTION_CONTRACT_PATH,
+    B_V2_EXECUTION_SOURCE_MANIFEST_PATH,
     B_V2_REPORT_PATH,
     C008CBStageStatus,
     C008CBV2ExecutionContract,
+    C008CBV2ExecutionSourceManifest,
     C008CBV2RunReport,
     DeterminismEvidenceKind,
     GateEvaluationStatus,
     build_c008c_b_v2_execution_contract,
+    build_c008c_b_v2_execution_source_manifest,
     build_c008c_b_v2_report,
     check_existing_c008c_b_v2_evidence,
     derive_c008c_b_v2_stage,
     validate_c008c_b_v2_execution_contract,
     validate_c008c_b_v2_execution_schedule,
+    validate_c008c_b_v2_execution_source_authority,
     validate_c008c_b_v2_report,
     write_c008c_b_v2_evidence,
 )
@@ -34,6 +37,7 @@ from msa.validation.experiments.execution.degeneration import (
 from msa.validation.experiments.execution.errors import (
     C008CBEvidenceError,
     C008CBManifestError,
+    C008CBPreflightError,
     C008CBReportError,
 )
 from msa.validation.experiments.execution.gate_evaluator import (
@@ -190,14 +194,18 @@ def b_v2_architecture_bundle(compact_components):
 
 
 def _copy_authority_root(target: Path) -> None:
-    (target / "docs/validation/evidence").mkdir(parents=True)
+    (target / "docs/validation/evidence").mkdir(parents=True, exist_ok=True)
     shutil.copyfile(ROOT / "pyproject.toml", target / "pyproject.toml")
     for name in _HISTORICAL_NAMES:
         shutil.copyfile(
             ROOT / "docs/validation/evidence" / name,
             target / "docs/validation/evidence" / name,
         )
-    for entry in build_protected_source_manifest(ROOT).files:
+    shutil.copyfile(
+        ROOT / B_V2_EXECUTION_SOURCE_MANIFEST_PATH,
+        target / B_V2_EXECUTION_SOURCE_MANIFEST_PATH,
+    )
+    for entry in build_c008c_b_v2_execution_source_manifest(ROOT).files:
         source = ROOT / entry.relative_path
         destination = target / entry.relative_path
         destination.parent.mkdir(parents=True, exist_ok=True)
@@ -212,6 +220,8 @@ def test_v2_report_round_trip_and_source_bound_validation(
     assert restored == report
     assert restored.schema_version == 2
     assert restored.run_report_id.startswith("c008c-b-v2-run-report-v2-")
+    source = validate_c008c_b_v2_execution_source_authority(ROOT)
+    assert restored.execution_source_manifest_id == source.source_manifest_id
     assert restored.stage_status is C008CBStageStatus.BLOCKED_BEFORE_OOS
     assert validate_c008c_b_v2_report(
         restored,
@@ -312,6 +322,83 @@ def test_contract_and_report_reject_authority_mismatches(
             b_v2_architecture_bundle["contract"],
             b_v2_architecture_bundle["manifest"],
         )
+
+    report_payload = b_v2_architecture_bundle["v2_report"].to_dict()
+    report_payload["execution_source_manifest_id"] = "forged-source-manifest"
+    forged_report = _resign(
+        C008CBV2RunReport, "run_report_id", report_payload
+    )
+    with pytest.raises(C008CBReportError, match="execution source authority"):
+        validate_c008c_b_v2_report(
+            forged_report,
+            b_v2_architecture_bundle["contract"],
+            b_v2_architecture_bundle["manifest"],
+        )
+
+
+def test_execution_source_manifest_is_canonical_complete_and_source_bound() -> None:
+    source = validate_c008c_b_v2_execution_source_authority(ROOT)
+    assert C008CBV2ExecutionSourceManifest.from_dict(source.to_dict()) == source
+    assert source.schema_version == 2
+    assert source.file_count == 138
+    assert source.source_manifest_id.startswith(
+        "c008c-b-v2-execution-source-manifest-v2-"
+    )
+    paths = tuple(item.relative_path for item in source.files)
+    assert paths == tuple(sorted(paths))
+    assert paths[-1] == "tools/validation/generate_c008c_b_v2_results.py"
+    assert all(
+        path.startswith("src/python/msa/") and path.endswith(".py")
+        for path in paths[:-1]
+    )
+
+
+@pytest.mark.parametrize(
+    "relative_path",
+    (
+        "src/python/msa/validation/experiments/execution/report_v2.py",
+        "src/python/msa/validation/experiments/execution/gate_evaluator.py",
+    ),
+)
+def test_dirty_execution_source_fails_before_primary_executor(
+    tmp_path: Path,
+    b_v2_architecture_bundle,
+    monkeypatch,
+    relative_path: str,
+) -> None:
+    import msa.validation.experiments.execution.report_v2 as module
+
+    root = tmp_path / "authority-root"
+    _copy_authority_root(root)
+    dirty = root / relative_path
+    dirty.write_bytes(dirty.read_bytes() + b"\n# dirty source test\n")
+    calls = 0
+
+    def primary(*_args, **_kwargs):
+        nonlocal calls
+        calls += 1
+        return b_v2_architecture_bundle["case_results"]
+
+    monkeypatch.setattr(module, "run_primary_execution_v2", primary)
+    with pytest.raises(C008CBPreflightError, match="differs from committed"):
+        module.run_c008c_b_v2_dev_validation(root)
+    assert calls == 0
+
+
+def test_source_authority_missing_or_noncanonical_fails_closed(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "authority-root"
+    _copy_authority_root(root)
+    authority = root / B_V2_EXECUTION_SOURCE_MANIFEST_PATH
+    authority.unlink()
+    with pytest.raises(C008CBPreflightError, match="missing or invalid"):
+        validate_c008c_b_v2_execution_source_authority(root)
+
+    _copy_authority_root(root)
+    authority.write_bytes(authority.read_bytes() + b" ")
+    with pytest.raises(C008CBPreflightError, match="not canonical"):
+        validate_c008c_b_v2_execution_source_authority(root)
 
 
 def test_report_rejects_swapped_or_shared_determinism_evidence(
@@ -449,6 +536,89 @@ def test_orchestration_routes_existing_components_without_real_execution(
     ]
 
 
+def test_source_change_during_mocked_orchestration_fails_before_outcome_write(
+    tmp_path: Path,
+    b_v2_architecture_bundle,
+    monkeypatch,
+) -> None:
+    import msa.validation.experiments.execution.report_v2 as module
+
+    root = tmp_path / "authority-root"
+    _copy_authority_root(root)
+    primary = C008CBV2PrimaryExecution(
+        b_v2_architecture_bundle["case_results"],
+        b_v2_architecture_bundle["same"],
+        b_v2_architecture_bundle["decimal"],
+    )
+    validate_calls = 0
+
+    def mutating_primary(*_args, **_kwargs):
+        path = (
+            root
+            / "src/python/msa/validation/experiments/execution/"
+            "gate_evaluator.py"
+        )
+        path.write_bytes(path.read_bytes() + b"\n# during-run mutation\n")
+        return primary
+
+    def routed(value):
+        return lambda *_args, **_kwargs: value
+
+    def validate(*_args, **_kwargs):
+        nonlocal validate_calls
+        validate_calls += 1
+        return b_v2_architecture_bundle["v2_report"]
+
+    monkeypatch.setattr(module, "run_primary_execution_v2", mutating_primary)
+    monkeypatch.setattr(
+        module,
+        "run_replay_comparisons",
+        routed(b_v2_architecture_bundle["replay"]),
+    )
+    monkeypatch.setattr(
+        module,
+        "run_fixed_cutoff_comparisons",
+        routed(b_v2_architecture_bundle["cutoff"]),
+    )
+    monkeypatch.setattr(
+        module,
+        "calculate_metric_deltas",
+        routed(b_v2_architecture_bundle["deltas"]),
+    )
+    monkeypatch.setattr(
+        module,
+        "evaluate_validation_degeneration_v2",
+        routed(
+            (
+                b_v2_architecture_bundle["v2_degeneration"],
+                b_v2_architecture_bundle["global"],
+            )
+        ),
+    )
+    monkeypatch.setattr(
+        module,
+        "evaluate_c008c_b_v2_gates",
+        routed(b_v2_architecture_bundle["v2_gates"]),
+    )
+    monkeypatch.setattr(
+        module,
+        "_partition_summaries",
+        routed(b_v2_architecture_bundle["v2_partitions"]),
+    )
+    monkeypatch.setattr(
+        module,
+        "build_c008c_b_v2_report",
+        routed(b_v2_architecture_bundle["v2_report"]),
+    )
+    monkeypatch.setattr(module, "validate_c008c_b_v2_report", validate)
+
+    with pytest.raises(C008CBPreflightError, match="changed during execution"):
+        module.run_c008c_b_v2_dev_validation(root)
+    assert validate_calls == 0
+    assert not (root / B_V2_EXECUTION_CONTRACT_PATH).exists()
+    assert not (root / B_V2_REPORT_PATH).exists()
+
+
 def test_v2_writer_is_append_only_and_preserves_all_historical_bytes(
     tmp_path: Path,
     b_v2_architecture_bundle,
@@ -493,6 +663,65 @@ def test_v2_writer_is_append_only_and_preserves_all_historical_bytes(
         for name in _HISTORICAL_NAMES
     }
     assert after == before
+
+
+def test_check_existing_fails_closed_on_current_execution_source_mismatch(
+    tmp_path: Path,
+    b_v2_architecture_bundle,
+    monkeypatch,
+) -> None:
+    import msa.validation.experiments.execution.evidence_v2 as module
+
+    root = tmp_path / "authority-root"
+    _copy_authority_root(root)
+    monkeypatch.setattr(
+        module,
+        "run_c008c_b_v2_dev_validation",
+        lambda _root: b_v2_architecture_bundle["v2_report"],
+    )
+    monkeypatch.setattr(
+        module,
+        "validate_c008c_b_v2_report",
+        lambda report, *_args: report,
+    )
+    write_c008c_b_v2_evidence(root)
+    dirty = (
+        root
+        / "src/python/msa/validation/experiments/execution/report_v2.py"
+    )
+    dirty.write_bytes(dirty.read_bytes() + b"\n# check-existing mismatch\n")
+    with pytest.raises(C008CBPreflightError, match="differs from committed"):
+        check_existing_c008c_b_v2_evidence(root)
+
+
+def test_writer_source_mismatch_fails_before_formal_runner(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    import msa.validation.experiments.execution.evidence_v2 as module
+
+    root = tmp_path / "authority-root"
+    _copy_authority_root(root)
+    dirty = (
+        root
+        / "src/python/msa/validation/experiments/execution/report_v2.py"
+    )
+    dirty.write_bytes(dirty.read_bytes() + b"\n# writer preflight mismatch\n")
+    calls = 0
+
+    def formal_runner(*_args, **_kwargs):
+        nonlocal calls
+        calls += 1
+        raise AssertionError("formal runner must not be called")
+
+    monkeypatch.setattr(
+        module, "run_c008c_b_v2_dev_validation", formal_runner
+    )
+    with pytest.raises(C008CBPreflightError, match="differs from committed"):
+        write_c008c_b_v2_evidence(root)
+    assert calls == 0
+    assert not (root / B_V2_EXECUTION_CONTRACT_PATH).exists()
+    assert not (root / B_V2_REPORT_PATH).exists()
 
 
 def test_writer_rejects_historical_path_and_missing_v2_never_falls_back(
