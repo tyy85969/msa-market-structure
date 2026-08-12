@@ -60,3 +60,58 @@ This distinction prevents a Baseline/global rewrite from becoming 25
 Variant-direct degeneration triggers without making the global rule a
 permanent Variant insufficiency, while preserving the frozen ten-rule policy
 and all historical evidence.
+
+## Formal execution architecture
+
+The outcome-free H1 contract is now the schedule authority for a separate
+formal B-v2 orchestration. The orchestration validates the historical v1
+Manifest and reviewed Protected Source transition before it can call the
+existing Primary, Replay, or fixed-cutoff components. Its executable schedule
+must remain exactly 390 DEV/VALIDATION pairs; any OOS, seed-3, or deferred pair
+in that schedule is rejected before an executor is called.
+
+Formal B-v2 outcomes use `C008CBV2RunReport`, schema version 2, and the
+`c008c-b-v2-*` identity namespace. Stage status is derived from the exact 27
+frozen Gate results. A required pre-OOS failure yields
+`BLOCKED_BEFORE_OOS`; the ready status is permitted only when all non-OOS
+requirements have their frozen PASS/partial/deferred statuses.
+
+Formal execution has an additional, independent schema-2 source authority at
+`docs/validation/evidence/c008c_b_v2_execution_source_manifest.json`. It
+canonically binds the ordered exact bytes of every `src/python/msa/**/*.py`
+file plus `tools/validation/generate_c008c_b_v2_results.py`. Those paths use
+repository-enforced LF bytes so the authority is identical in Windows and
+Linux checkouts. This authority does not replace the historical execution
+Manifest or the reviewed Protected Source Manifest; the Run Report binds all
+three IDs for their separate responsibilities.
+
+The committed authority is the exact Git blob at
+`HEAD:docs/validation/evidence/c008c_b_v2_execution_source_manifest.json`, not
+an unanchored worktree JSON file. The loader uses a fixed, read-only Git command
+with no shell, requires the worktree authority bytes to equal that HEAD blob,
+parses only the HEAD bytes, and then requires reconstructed current source to
+equal the HEAD authority.
+
+The formal runner performs this Git-anchored validation before its first
+Primary executor call. It retains that exact manifest as `source_before`, binds
+its ID in the Run Report, repeats the complete Git-anchored validation after
+Primary, Replay, fixed-cutoff, degeneration, Gates, and report assembly, and
+then requires `source_before == source_after`. The outcome writer performs the
+same preflight and never regenerates or updates source authority.
+`--check-existing` validates the HEAD blob, worktree authority, current source,
+and Run Report binding without executing an outcome.
+
+B-v2 Evidence is append-only at these independent paths:
+
+- `docs/validation/evidence/c008c_b_v2_execution_contract.json`
+- `docs/validation/evidence/c008c_b_v2_dev_validation_report.json`
+
+The historical v1 Manifest and report paths remain unchanged. The v2 writer
+refuses different existing v2 bytes, snapshots the historical v1, Protected
+Source, H2, and H3 authority bytes, and verifies those bytes again after every
+write or full check. `--check-existing` validates canonical v2 bytes and all
+source bindings without executing Core, Replay, or fixed-cutoff outcomes.
+
+This architecture change does not create either v2 Evidence file and does not
+perform the formal B-v2 experiment. The default/write and `--check` CLI modes
+are reserved for a separately authorized formal execution.

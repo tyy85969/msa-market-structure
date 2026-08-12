@@ -14,7 +14,13 @@ from typing import Any, ClassVar, Self
 from ..identity import digest, require_semantic_id, semantic_id
 from .contracts import (
     C008CBExecutionManifest,
+    C008CBStageStatus,
     DegenerationStatus,
+    ExperimentCaseResult,
+    ExperimentFixedCutoffComparison,
+    ExperimentMetricDeltaSummary,
+    ExperimentPartitionSummary,
+    ExperimentReplayComparison,
     GateEvaluationStatus,
     ReplayComparisonStatus,
 )
@@ -23,6 +29,7 @@ from .errors import (
     C008CBDegenerationError,
     C008CBGateError,
     C008CBManifestError,
+    C008CBReportError,
 )
 
 
@@ -108,6 +115,122 @@ def _identity(
         field_name=id_field,
         error_type=error,
     )
+
+
+@dataclass(frozen=True, slots=True)
+class C008CBV2ExecutionSourceFile:
+    """One exact worktree byte binding in the formal B-v2 source lock."""
+
+    relative_path: str
+    sha256: str
+    schema_version: int = B_V2_SCHEMA_VERSION
+
+    def __post_init__(self) -> None:
+        error = C008CBManifestError
+        _schema(self.schema_version, type(self).__name__, error)
+        path = _text(self.relative_path, "relative_path", error)
+        if (
+            "\\" in path
+            or path.startswith("/")
+            or ".." in path.split("/")
+            or not (
+                (path.startswith("src/python/msa/") and path.endswith(".py"))
+                or path
+                == "tools/validation/generate_c008c_b_v2_results.py"
+            )
+        ):
+            raise error("execution source relative_path is outside frozen scope")
+        sha256 = _text(self.sha256, "sha256", error)
+        if len(sha256) != 64 or any(
+            char not in "0123456789abcdef" for char in sha256
+        ):
+            raise error("execution source sha256 must be lowercase hex")
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "relative_path": self.relative_path,
+            "sha256": self.sha256,
+            "schema_version": self.schema_version,
+        }
+
+    @classmethod
+    def from_dict(cls, payload: Mapping[str, Any]) -> Self:
+        data = _exact(payload, cls, C008CBManifestError)
+        try:
+            return cls(
+                relative_path=data["relative_path"],
+                sha256=data["sha256"],
+                schema_version=data["schema_version"],
+            )
+        except (KeyError, TypeError, ValueError) as exc:
+            raise C008CBManifestError(
+                "invalid serialized B-v2 execution source file"
+            ) from exc
+
+
+@dataclass(frozen=True, slots=True)
+class C008CBV2ExecutionSourceManifest:
+    """Owner-reviewed exact source bytes for one future formal B-v2 run."""
+
+    source_manifest_id: str
+    files: tuple[C008CBV2ExecutionSourceFile, ...]
+    file_count: int
+    schema_version: int = B_V2_SCHEMA_VERSION
+
+    _PREFIX: ClassVar[str] = (
+        "c008c-b-v2-execution-source-manifest-v2-"
+    )
+
+    def __post_init__(self) -> None:
+        error = C008CBManifestError
+        _schema(self.schema_version, type(self).__name__, error)
+        _text(self.source_manifest_id, "source_manifest_id", error)
+        if (
+            not isinstance(self.files, tuple)
+            or not self.files
+            or any(
+                not isinstance(item, C008CBV2ExecutionSourceFile)
+                for item in self.files
+            )
+        ):
+            raise error("execution source files must be a non-empty tuple")
+        paths = tuple(item.relative_path for item in self.files)
+        if paths != tuple(sorted(paths)) or len(set(paths)) != len(paths):
+            raise error("execution source files must be unique and ordered")
+        if type(self.file_count) is not int or self.file_count != len(self.files):
+            raise error("execution source file_count mismatch")
+        _identity(
+            self,
+            id_field="source_manifest_id",
+            prefix=self._PREFIX,
+            error=error,
+        )
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "source_manifest_id": self.source_manifest_id,
+            "files": [item.to_dict() for item in self.files],
+            "file_count": self.file_count,
+            "schema_version": self.schema_version,
+        }
+
+    @classmethod
+    def from_dict(cls, payload: Mapping[str, Any]) -> Self:
+        data = _exact(payload, cls, C008CBManifestError)
+        try:
+            return cls(
+                source_manifest_id=data["source_manifest_id"],
+                files=tuple(
+                    C008CBV2ExecutionSourceFile.from_dict(item)
+                    for item in data["files"]
+                ),
+                file_count=data["file_count"],
+                schema_version=data["schema_version"],
+            )
+        except (KeyError, TypeError, ValueError) as exc:
+            raise C008CBManifestError(
+                "invalid serialized B-v2 execution source manifest"
+            ) from exc
 
 
 @dataclass(frozen=True, slots=True)
@@ -852,6 +975,304 @@ class ExperimentGateResultV2:
             ) from exc
 
 
+@dataclass(frozen=True, slots=True)
+class C008CBV2RunReport:
+    """Canonical formal B-v2 outcome report; v1 Evidence remains separate."""
+
+    run_report_id: str
+    execution_semantics: str
+    execution_contract_id: str
+    historical_execution_manifest_id: str
+    reviewed_protected_source_manifest_id: str
+    execution_source_manifest_id: str
+    case_results: tuple[ExperimentCaseResult, ...]
+    same_context_comparisons: tuple[ExperimentDeterminismComparisonV2, ...]
+    decimal_context_comparisons: tuple[
+        ExperimentDeterminismComparisonV2, ...
+    ]
+    metric_delta_summaries: tuple[ExperimentMetricDeltaSummary, ...]
+    partition_summaries: tuple[ExperimentPartitionSummary, ...]
+    replay_comparisons: tuple[ExperimentReplayComparison, ...]
+    fixed_cutoff_comparisons: tuple[ExperimentFixedCutoffComparison, ...]
+    degeneration_summaries: tuple[ExperimentDegenerationSummaryV2, ...]
+    global_degeneration_evidence: ExperimentGlobalDegenerationEvidenceV2
+    gate_results: tuple[ExperimentGateResultV2, ...]
+    stage_status: C008CBStageStatus
+    executed_pair_count: int
+    deferred_oos_pair_count: int
+    oos_executed: bool
+    schema_version: int = B_V2_SCHEMA_VERSION
+
+    _PREFIX: ClassVar[str] = "c008c-b-v2-run-report-v2-"
+
+    def __post_init__(self) -> None:
+        error = C008CBReportError
+        _schema(self.schema_version, type(self).__name__, error)
+        if self.execution_semantics != B_V2_EXECUTION_SEMANTICS:
+            raise error("run report must use C-008C-B-v2 semantics")
+        for name in (
+            "run_report_id",
+            "execution_contract_id",
+            "historical_execution_manifest_id",
+            "reviewed_protected_source_manifest_id",
+            "execution_source_manifest_id",
+        ):
+            _text(getattr(self, name), name, error)
+        expected_objects = (
+            (self.case_results, ExperimentCaseResult, 390, "case_results"),
+            (
+                self.same_context_comparisons,
+                ExperimentDeterminismComparisonV2,
+                390,
+                "same_context_comparisons",
+            ),
+            (
+                self.decimal_context_comparisons,
+                ExperimentDeterminismComparisonV2,
+                390,
+                "decimal_context_comparisons",
+            ),
+            (
+                self.metric_delta_summaries,
+                ExperimentMetricDeltaSummary,
+                50,
+                "metric_delta_summaries",
+            ),
+            (
+                self.partition_summaries,
+                ExperimentPartitionSummary,
+                2,
+                "partition_summaries",
+            ),
+            (
+                self.replay_comparisons,
+                ExperimentReplayComparison,
+                140,
+                "replay_comparisons",
+            ),
+            (
+                self.fixed_cutoff_comparisons,
+                ExperimentFixedCutoffComparison,
+                15,
+                "fixed_cutoff_comparisons",
+            ),
+            (
+                self.degeneration_summaries,
+                ExperimentDegenerationSummaryV2,
+                25,
+                "degeneration_summaries",
+            ),
+            (
+                self.gate_results,
+                ExperimentGateResultV2,
+                27,
+                "gate_results",
+            ),
+        )
+        for values, expected_type, expected_length, label in expected_objects:
+            if (
+                not isinstance(values, tuple)
+                or len(values) != expected_length
+                or any(not isinstance(item, expected_type) for item in values)
+            ):
+                raise error(
+                    f"{label} must contain exactly {expected_length} "
+                    f"{expected_type.__name__} values"
+                )
+        if not isinstance(
+            self.global_degeneration_evidence,
+            ExperimentGlobalDegenerationEvidenceV2,
+        ):
+            raise error("global degeneration evidence is required")
+        unique_sources = (
+            (
+                self.case_results,
+                "execution_pair_id",
+                390,
+                "case result execution pairs",
+            ),
+            (
+                self.same_context_comparisons,
+                "execution_pair_id",
+                390,
+                "same-context execution pairs",
+            ),
+            (
+                self.decimal_context_comparisons,
+                "execution_pair_id",
+                390,
+                "Decimal-context execution pairs",
+            ),
+            (
+                self.replay_comparisons,
+                "replay_sample_id",
+                140,
+                "replay samples",
+            ),
+            (
+                self.fixed_cutoff_comparisons,
+                "dataset_case_id",
+                15,
+                "fixed-cutoff cases",
+            ),
+            (
+                self.degeneration_summaries,
+                "variant_id",
+                25,
+                "degeneration variants",
+            ),
+            (self.gate_results, "gate_code", 27, "Gate codes"),
+        )
+        for values, attribute, expected, label in unique_sources:
+            if len({getattr(item, attribute) for item in values}) != expected:
+                raise error(f"{label} must be unique")
+        if any(
+            item.comparison_kind
+            is not DeterminismEvidenceKind.SAME_CONTEXT_REPEAT
+            or item.decimal_context_changed
+            for item in self.same_context_comparisons
+        ):
+            raise error("same-context evidence binding is invalid")
+        if any(
+            item.comparison_kind
+            is not DeterminismEvidenceKind.DECIMAL_CONTEXT_PERTURBATION
+            or not item.decimal_context_changed
+            for item in self.decimal_context_comparisons
+        ):
+            raise error("Decimal-context evidence binding is invalid")
+        if not isinstance(self.stage_status, C008CBStageStatus):
+            raise error("stage_status must be C008CBStageStatus")
+        if (
+            type(self.executed_pair_count) is not int
+            or self.executed_pair_count != 390
+            or type(self.deferred_oos_pair_count) is not int
+            or self.deferred_oos_pair_count != 130
+        ):
+            raise error("B-v2 report must declare 390 executed and 130 deferred")
+        if _bool(self.oos_executed, "oos_executed", error):
+            raise error("B-v2 report cannot contain OOS execution")
+        _identity(
+            self,
+            id_field="run_report_id",
+            prefix=self._PREFIX,
+            error=error,
+        )
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "run_report_id": self.run_report_id,
+            "execution_semantics": self.execution_semantics,
+            "execution_contract_id": self.execution_contract_id,
+            "historical_execution_manifest_id": (
+                self.historical_execution_manifest_id
+            ),
+            "reviewed_protected_source_manifest_id": (
+                self.reviewed_protected_source_manifest_id
+            ),
+            "execution_source_manifest_id": self.execution_source_manifest_id,
+            "case_results": [item.to_dict() for item in self.case_results],
+            "same_context_comparisons": [
+                item.to_dict() for item in self.same_context_comparisons
+            ],
+            "decimal_context_comparisons": [
+                item.to_dict() for item in self.decimal_context_comparisons
+            ],
+            "metric_delta_summaries": [
+                item.to_dict() for item in self.metric_delta_summaries
+            ],
+            "partition_summaries": [
+                item.to_dict() for item in self.partition_summaries
+            ],
+            "replay_comparisons": [
+                item.to_dict() for item in self.replay_comparisons
+            ],
+            "fixed_cutoff_comparisons": [
+                item.to_dict() for item in self.fixed_cutoff_comparisons
+            ],
+            "degeneration_summaries": [
+                item.to_dict() for item in self.degeneration_summaries
+            ],
+            "global_degeneration_evidence": (
+                self.global_degeneration_evidence.to_dict()
+            ),
+            "gate_results": [item.to_dict() for item in self.gate_results],
+            "stage_status": self.stage_status.value,
+            "executed_pair_count": self.executed_pair_count,
+            "deferred_oos_pair_count": self.deferred_oos_pair_count,
+            "oos_executed": self.oos_executed,
+            "schema_version": self.schema_version,
+        }
+
+    @classmethod
+    def from_dict(cls, payload: Mapping[str, Any]) -> Self:
+        data = _exact(payload, cls, C008CBReportError)
+        try:
+            return cls(
+                run_report_id=data["run_report_id"],
+                execution_semantics=data["execution_semantics"],
+                execution_contract_id=data["execution_contract_id"],
+                historical_execution_manifest_id=data[
+                    "historical_execution_manifest_id"
+                ],
+                reviewed_protected_source_manifest_id=data[
+                    "reviewed_protected_source_manifest_id"
+                ],
+                execution_source_manifest_id=data[
+                    "execution_source_manifest_id"
+                ],
+                case_results=tuple(
+                    ExperimentCaseResult.from_dict(item)
+                    for item in data["case_results"]
+                ),
+                same_context_comparisons=tuple(
+                    ExperimentDeterminismComparisonV2.from_dict(item)
+                    for item in data["same_context_comparisons"]
+                ),
+                decimal_context_comparisons=tuple(
+                    ExperimentDeterminismComparisonV2.from_dict(item)
+                    for item in data["decimal_context_comparisons"]
+                ),
+                metric_delta_summaries=tuple(
+                    ExperimentMetricDeltaSummary.from_dict(item)
+                    for item in data["metric_delta_summaries"]
+                ),
+                partition_summaries=tuple(
+                    ExperimentPartitionSummary.from_dict(item)
+                    for item in data["partition_summaries"]
+                ),
+                replay_comparisons=tuple(
+                    ExperimentReplayComparison.from_dict(item)
+                    for item in data["replay_comparisons"]
+                ),
+                fixed_cutoff_comparisons=tuple(
+                    ExperimentFixedCutoffComparison.from_dict(item)
+                    for item in data["fixed_cutoff_comparisons"]
+                ),
+                degeneration_summaries=tuple(
+                    ExperimentDegenerationSummaryV2.from_dict(item)
+                    for item in data["degeneration_summaries"]
+                ),
+                global_degeneration_evidence=(
+                    ExperimentGlobalDegenerationEvidenceV2.from_dict(
+                        data["global_degeneration_evidence"]
+                    )
+                ),
+                gate_results=tuple(
+                    ExperimentGateResultV2.from_dict(item)
+                    for item in data["gate_results"]
+                ),
+                stage_status=C008CBStageStatus(data["stage_status"]),
+                executed_pair_count=data["executed_pair_count"],
+                deferred_oos_pair_count=data["deferred_oos_pair_count"],
+                oos_executed=data["oos_executed"],
+                schema_version=data["schema_version"],
+            )
+        except (KeyError, TypeError, ValueError) as exc:
+            raise C008CBReportError(
+                "invalid serialized C008CBV2RunReport"
+            ) from exc
+
+
 def v2_payload_id(prefix: str, payload: Mapping[str, object]) -> str:
     """Small public helper used by the v2 harness constructors."""
 
@@ -866,6 +1287,9 @@ __all__ = [
     "B_V2_EXECUTION_SEMANTICS",
     "B_V2_SCHEMA_VERSION",
     "C008CBV2ExecutionContract",
+    "C008CBV2ExecutionSourceFile",
+    "C008CBV2ExecutionSourceManifest",
+    "C008CBV2RunReport",
     "DegenerationEvidenceScope",
     "DeterminismEvidenceKind",
     "ExperimentDegenerationFindingV2",
