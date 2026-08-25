@@ -9,6 +9,7 @@ before the first seed-3 Core executor is entered.
 from __future__ import annotations
 
 from concurrent.futures import ProcessPoolExecutor
+from dataclasses import dataclass
 from datetime import timedelta
 from decimal import ROUND_FLOOR, ROUND_HALF_EVEN, localcontext
 import hashlib
@@ -19,13 +20,13 @@ import subprocess
 from time import perf_counter
 from typing import Any, Mapping
 
-from msa.research.msa_core import MSACorePipeline, replay_msa_core_run
+from msa.research.msa_core import MSACorePipeline, MSACoreRun, replay_msa_core_run
 from msa.research.msa_core.errors import MSACoreError
 from msa.validation.causal_audit import CausalAuditor
+from msa.validation.contracts import CausalAuditReport
 from msa.validation.errors import MSAValidationError
 from msa.validation.experiments.contracts import DatasetPartition
 from msa.validation.experiments.execution.contracts import (
-    ExperimentCaseResult,
     ExperimentCaseStatus,
     ExperimentFailureStage,
     ExperimentFixedCutoffComparison,
@@ -67,9 +68,8 @@ from msa.validation.experiments.execution.replay import (
     _comparison as _replay_comparison,
 )
 from msa.validation.experiments.execution.runner import (
-    _ExecutionArtifacts,
-    _case_result,
     _determinism_v2,
+    _snapshot,
 )
 from msa.validation.experiments.identity import (
     canonical_json_bytes,
@@ -77,11 +77,17 @@ from msa.validation.experiments.identity import (
     semantic_id,
 )
 from msa.validation.metrics import (
+    MetricEvaluationReport,
     StructuralMetricAggregate,
     StructuralMetricError,
     StructuralMetricEvaluator,
     default_metric_formula_registry,
     validate_metric_evaluation_report,
+)
+
+from .contracts import (
+    C008CCCaseResult,
+    C008CCPartition,
 )
 
 
@@ -110,6 +116,7 @@ FORMAL_COMMAND = "python -B tools/validation/generate_c008c_c_results.py"
 _C_SOURCE_PATHS = (
     Path("tools/validation/c008c_c/__init__.py"),
     Path("tools/validation/c008c_c/architecture.py"),
+    Path("tools/validation/c008c_c/contracts.py"),
     Path("tools/validation/generate_c008c_c_results.py"),
 )
 _C_EVIDENCE_PATHS = frozenset((CONTRACT_PATH, ATTEMPT_PATH, REPORT_PATH))
@@ -119,6 +126,14 @@ _GIT_TIMEOUT_SECONDS = 10
 
 class C008CCError(RuntimeError):
     """Fail-closed C-008C-C architecture or Evidence error."""
+
+
+@dataclass(frozen=True, slots=True)
+class _CExecutionArtifacts:
+    result: C008CCCaseResult
+    run: MSACoreRun | None
+    audit: CausalAuditReport | None
+    metric_report: MetricEvaluationReport | None
 
 
 def _root(root: Path | None) -> Path:
@@ -405,11 +420,87 @@ def validate_c008c_c_preflight(
     return contract
 
 
+def _c_case_result(
+    pair: object,
+    variant: object,
+    *,
+    status: ExperimentCaseStatus,
+    run: MSACoreRun | None,
+    audit: CausalAuditReport | None,
+    metric_report: MetricEvaluationReport | None,
+    failure_stage: ExperimentFailureStage | None,
+    failure_error_type: str | None,
+) -> C008CCCaseResult:
+    """Build one C-owned locked-OOS outcome without entering a B CaseResult."""
+
+    if pair.seed != 3 or pair.partition is not DatasetPartition.OOS:
+        raise C008CCError("C CaseResult source must be frozen seed-3 OOS")
+    aggregate_snapshots = (
+        ()
+        if metric_report is None
+        or status is ExperimentCaseStatus.METRIC_SOURCE_BIND_FAILED
+        else tuple(_snapshot(item) for item in metric_report.aggregates)
+    )
+    run_payload = None if run is None else run.to_dict()
+    audit_payload = None if audit is None else audit.to_dict()
+    metric_payload = None if metric_report is None else metric_report.to_dict()
+    return C008CCCaseResult.create(
+        execution_pair_id=pair.execution_pair_id,
+        dataset_case_id=pair.dataset_case_id,
+        variant_id=pair.variant_id,
+        experiment_kind=variant.experiment_kind,
+        level=variant.level,
+        partition=C008CCPartition.LOCKED_OOS,
+        scenario=pair.scenario,
+        seed=3,
+        execution_status=status,
+        source_input_payload_digest=pair.source_input_payload_digest,
+        core_config_payload_digest=pair.core_config_payload_digest,
+        metric_config_payload_digest=pair.metric_config_payload_digest,
+        run_id=None if run is None else run.run_id,
+        run_payload_digest=None if run_payload is None else digest(run_payload),
+        audit_report_id=None if audit is None else audit.audit_report_id,
+        audit_payload_digest=(
+            None if audit_payload is None else digest(audit_payload)
+        ),
+        audit_passed=None if audit is None else audit.passed,
+        metric_report_id=(
+            None if metric_report is None else metric_report.metric_report_id
+        ),
+        metric_report_payload_digest=(
+            None if metric_payload is None else digest(metric_payload)
+        ),
+        aggregates=aggregate_snapshots,
+        event_count=0 if metric_report is None else metric_report.event_count,
+        box_episode_count=(
+            0 if run is None else run.report.created_event_count
+        ),
+        matured_count=(
+            0
+            if metric_report is None
+            else metric_report.matured_observation_count
+        ),
+        censored_count=(
+            0
+            if metric_report is None
+            else metric_report.censored_observation_count
+        ),
+        unavailable_count=(
+            0
+            if metric_report is None
+            else metric_report.unavailable_observation_count
+        ),
+        failure_stage=failure_stage,
+        failure_error_type=failure_error_type,
+        schema_version=1,
+    )
+
+
 def _execute_oos_pair(
     pair: object,
     case: object,
     variant: object,
-) -> _ExecutionArtifacts:
+) -> _CExecutionArtifacts:
     if (
         pair.dataset_case_id != case.dataset_case_id
         or pair.variant_id != variant.variant_id
@@ -423,8 +514,8 @@ def _execute_oos_pair(
     try:
         run = MSACorePipeline(variant.core_config_snapshot).run(case.source_input)
     except MSACoreError as exc:
-        return _ExecutionArtifacts(
-            _case_result(
+        return _CExecutionArtifacts(
+            _c_case_result(
                 pair,
                 variant,
                 status=ExperimentCaseStatus.PIPELINE_FAILED,
@@ -441,8 +532,8 @@ def _execute_oos_pair(
     try:
         audit = CausalAuditor().audit_run(run)
     except MSAValidationError as exc:
-        return _ExecutionArtifacts(
-            _case_result(
+        return _CExecutionArtifacts(
+            _c_case_result(
                 pair,
                 variant,
                 status=ExperimentCaseStatus.CAUSAL_AUDIT_FAILED,
@@ -457,8 +548,8 @@ def _execute_oos_pair(
             None,
         )
     if not audit.passed:
-        return _ExecutionArtifacts(
-            _case_result(
+        return _CExecutionArtifacts(
+            _c_case_result(
                 pair,
                 variant,
                 status=ExperimentCaseStatus.CAUSAL_AUDIT_FAILED,
@@ -477,8 +568,8 @@ def _execute_oos_pair(
             variant.metric_config_snapshot
         ).evaluate(run)
     except StructuralMetricError as exc:
-        return _ExecutionArtifacts(
-            _case_result(
+        return _CExecutionArtifacts(
+            _c_case_result(
                 pair,
                 variant,
                 status=ExperimentCaseStatus.METRIC_EVALUATION_FAILED,
@@ -495,8 +586,8 @@ def _execute_oos_pair(
     try:
         validate_metric_evaluation_report(run, metric)
     except StructuralMetricError as exc:
-        return _ExecutionArtifacts(
-            _case_result(
+        return _CExecutionArtifacts(
+            _c_case_result(
                 pair,
                 variant,
                 status=ExperimentCaseStatus.METRIC_SOURCE_BIND_FAILED,
@@ -510,8 +601,8 @@ def _execute_oos_pair(
             audit,
             metric,
         )
-    return _ExecutionArtifacts(
-        _case_result(
+    return _CExecutionArtifacts(
+        _c_case_result(
             pair,
             variant,
             status=ExperimentCaseStatus.PASSED,
@@ -696,7 +787,7 @@ def _run_primary(
     base: Path,
     manifest: object,
 ) -> tuple[
-    tuple[ExperimentCaseResult, ...],
+    tuple[C008CCCaseResult, ...],
     tuple[ExperimentDeterminismComparisonV2, ...],
     tuple[ExperimentDeterminismComparisonV2, ...],
     list[dict[str, object]],
@@ -710,7 +801,7 @@ def _run_primary(
     )
     if len(scheduled) != 130:
         raise C008CCError("C primary schedule must contain exactly 130 pairs")
-    results: list[ExperimentCaseResult] = []
+    results: list[C008CCCaseResult] = []
     same: list[ExperimentDeterminismComparisonV2] = []
     decimal: list[ExperimentDeterminismComparisonV2] = []
     coverage_sources: list[dict[str, object]] = []
@@ -788,7 +879,7 @@ def _run_cutoff(base: Path, manifest: object) -> tuple[object, ...]:
 
 def _oos_metric_deltas(
     base: Path,
-    case_results: tuple[ExperimentCaseResult, ...],
+    case_results: tuple[C008CCCaseResult, ...],
 ) -> tuple[ExperimentMetricDeltaSummary, ...]:
     _, dataset, _, plan, _ = load_c008c_b_authority(base)
     oos_case_ids = tuple(
@@ -832,7 +923,7 @@ def _oos_metric_deltas(
 
 def _coverage_summaries(
     base: Path,
-    case_results: tuple[ExperimentCaseResult, ...],
+    case_results: tuple[C008CCCaseResult, ...],
     sources: list[dict[str, object]],
 ) -> list[dict[str, object]]:
     _, _, gates, plan, _ = load_c008c_b_authority(base)
@@ -962,7 +1053,7 @@ def _finding(
 def _degeneration_summaries(
     base: Path,
     b_report: C008CBV2RunReport,
-    case_results: tuple[ExperimentCaseResult, ...],
+    case_results: tuple[C008CCCaseResult, ...],
     metric_deltas: tuple[ExperimentMetricDeltaSummary, ...],
     c_cutoff: tuple[ExperimentFixedCutoffComparison, ...],
 ) -> tuple[list[dict[str, object]], dict[str, object]]:
@@ -1175,7 +1266,7 @@ def _gate_results(
     base: Path,
     contract: Mapping[str, object],
     b_report: C008CBV2RunReport,
-    case_results: tuple[ExperimentCaseResult, ...],
+    case_results: tuple[C008CCCaseResult, ...],
     same: tuple[ExperimentDeterminismComparisonV2, ...],
     decimal: tuple[ExperimentDeterminismComparisonV2, ...],
     coverage: list[dict[str, object]],
@@ -1357,7 +1448,7 @@ def _build_report(
     contract: Mapping[str, object],
     attempt: Mapping[str, object],
     b_report: C008CBV2RunReport,
-    case_results: tuple[ExperimentCaseResult, ...],
+    case_results: tuple[C008CCCaseResult, ...],
     same: tuple[ExperimentDeterminismComparisonV2, ...],
     decimal: tuple[ExperimentDeterminismComparisonV2, ...],
     metric_deltas: tuple[ExperimentMetricDeltaSummary, ...],
@@ -1484,7 +1575,7 @@ def _build_report(
 def _objects_from_report(
     payload: Mapping[str, object],
 ) -> tuple[
-    tuple[ExperimentCaseResult, ...],
+    tuple[C008CCCaseResult, ...],
     tuple[ExperimentDeterminismComparisonV2, ...],
     tuple[ExperimentDeterminismComparisonV2, ...],
     tuple[ExperimentMetricDeltaSummary, ...],
@@ -1494,7 +1585,7 @@ def _objects_from_report(
     try:
         return (
             tuple(
-                ExperimentCaseResult.from_dict(item)
+                C008CCCaseResult.from_dict(item)
                 for item in payload["case_results"]  # type: ignore[index]
             ),
             tuple(
@@ -1557,7 +1648,8 @@ def validate_c008c_c_report(
         or tuple(item.execution_pair_id for item in same) != expected_pair_ids
         or tuple(item.execution_pair_id for item in decimal) != expected_pair_ids
         or any(
-            item.seed != 3 or item.partition is not DatasetPartition.OOS
+            item.seed != 3
+            or item.partition is not C008CCPartition.LOCKED_OOS
             for item in case_results
         )
         or len(metric_deltas) != 25
