@@ -10,3 +10,5 @@ src/python/msa/validation/contracts.py text eol=lf
 src/python/msa/validation/metric_registry.py text eol=lf
 src/python/msa/**/*.py text eol=lf
 tools/validation/generate_c008c_b_v2_results.py text eol=lf
+tools/validation/c008c_c/** text eol=lf
+tools/validation/generate_c008c_c_results.py text eol=lf
