@@ -92,13 +92,20 @@ from .contracts import (
 
 
 SCHEMA_VERSION = 1
-EXECUTION_SEMANTICS = "C-008C-C-LOCKED-SYNTHETIC-OOS-V1"
-BASE_MAIN_SHA = "e5a9b18aa47e0bfc1af93f0cdd9ecee5ae526b35"
-CONTRACT_PATH = Path(
+EXECUTION_SEMANTICS = "C-008C-C-POST-FIX-LOCKED-SYNTHETIC-OOS-V1"
+BASE_MAIN_SHA = "6e031bd4f73364df1ff60743e3f011f78c45df63"
+LEGACY_CONTRACT_PATH = Path(
     "docs/validation/evidence/c008c_c_locked_oos_execution_contract.json"
 )
-ATTEMPT_PATH = Path(
+LEGACY_ATTEMPT_PATH = Path(
     "docs/validation/evidence/c008c_c_locked_oos_attempt.json"
+)
+CONTRACT_PATH = Path(
+    "docs/validation/evidence/"
+    "c008c_c_post_fix_locked_oos_execution_contract.json"
+)
+ATTEMPT_PATH = Path(
+    "docs/validation/evidence/c008c_c_post_fix_locked_oos_attempt.json"
 )
 REPORT_PATH = Path(
     "docs/validation/evidence/c008c_c_locked_oos_report.json"
@@ -352,7 +359,7 @@ def build_c008c_c_execution_contract(
     payload = _contract_without_id(base)
     return {
         "execution_contract_id": semantic_id(
-            "c008c-c-locked-oos-execution-contract-v1-", payload
+            "c008c-c-post-fix-locked-oos-execution-contract-v1-", payload
         ),
         **payload,
     }
@@ -1438,7 +1445,9 @@ def _attempt_payload(contract: Mapping[str, object]) -> dict[str, object]:
         "schema_version": SCHEMA_VERSION,
     }
     return {
-        "attempt_id": semantic_id("c008c-c-locked-oos-attempt-v1-", payload),
+        "attempt_id": semantic_id(
+            "c008c-c-post-fix-locked-oos-attempt-v1-", payload
+        ),
         **payload,
     }
 
@@ -1566,7 +1575,7 @@ def _build_report(
     }
     return {
         "run_report_id": semantic_id(
-            "c008c-c-locked-oos-run-report-v1-", payload
+            "c008c-c-post-fix-locked-oos-run-report-v1-", payload
         ),
         **payload,
     }
@@ -1787,6 +1796,8 @@ __all__ = [
     "CONTRACT_PATH",
     "EXECUTION_SEMANTICS",
     "FORMAL_COMMAND",
+    "LEGACY_ATTEMPT_PATH",
+    "LEGACY_CONTRACT_PATH",
     "REPORT_PATH",
     "build_c008c_c_execution_contract",
     "check_existing_c008c_c_evidence",

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 from pathlib import Path
 
 import pytest
@@ -13,6 +14,9 @@ from msa.validation.experiments.execution.manifest import (
 
 
 ROOT = Path(__file__).resolve().parents[5]
+LEGACY_ATTEMPT_SHA256 = (
+    "9b085a2b05de853471d1fe12f1eb44e56a2de00529e3f1ef4c1233ea27cf7104"
+)
 
 
 @pytest.fixture(scope="module")
@@ -72,6 +76,70 @@ def test_contract_preserves_b_v2_source_scope(
         item["relative_path"]
         for item in contract["historical_evidence_locks"]
     }
+
+
+def test_post_fix_binding_preserves_legacy_failed_attempt(
+    contract: dict[str, object],
+) -> None:
+    legacy_attempt = ROOT / architecture.LEGACY_ATTEMPT_PATH
+    legacy_contract = ROOT / architecture.LEGACY_CONTRACT_PATH
+    historical = {
+        item["relative_path"]: item["sha256"]
+        for item in contract["historical_evidence_locks"]
+    }
+    assert architecture.CONTRACT_PATH != architecture.LEGACY_CONTRACT_PATH
+    assert architecture.ATTEMPT_PATH != architecture.LEGACY_ATTEMPT_PATH
+    assert hashlib.sha256(legacy_attempt.read_bytes()).hexdigest() == (
+        LEGACY_ATTEMPT_SHA256
+    )
+    assert historical[architecture.LEGACY_ATTEMPT_PATH.as_posix()] == (
+        LEGACY_ATTEMPT_SHA256
+    )
+    assert historical[architecture.LEGACY_CONTRACT_PATH.as_posix()] == (
+        hashlib.sha256(legacy_contract.read_bytes()).hexdigest()
+    )
+
+
+def test_post_fix_contract_binds_current_c_sources(
+    contract: dict[str, object],
+) -> None:
+    locks = {
+        item["relative_path"]: item["sha256"]
+        for item in contract["c_source_locks"]
+    }
+    assert set(locks) == {
+        item.as_posix() for item in architecture._C_SOURCE_PATHS
+    }
+    assert locks == {
+        item.as_posix(): hashlib.sha256((ROOT / item).read_bytes()).hexdigest()
+        for item in architecture._C_SOURCE_PATHS
+    }
+
+
+def test_preflight_rejects_one_byte_locked_source_mutation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    contract_path = ROOT / architecture.CONTRACT_PATH
+    committed_raw = contract_path.read_bytes()
+    locked_path = (ROOT / architecture._C_SOURCE_PATHS[0]).resolve()
+    actual_sha256 = architecture._sha256
+
+    def _mutated_sha256(path: Path) -> str:
+        if path.resolve() == locked_path:
+            return hashlib.sha256(path.read_bytes() + b"\x00").hexdigest()
+        return actual_sha256(path)
+
+    monkeypatch.setattr(
+        architecture,
+        "_head_blob",
+        lambda base, relative: committed_raw,
+    )
+    monkeypatch.setattr(architecture, "_sha256", _mutated_sha256)
+    with pytest.raises(
+        architecture.C008CCError,
+        match="contract or locked source bytes differ",
+    ):
+        architecture.validate_c008c_c_preflight(ROOT, require_clean=False)
 
 
 def test_attempt_marker_is_deterministic_and_forbids_retry(
