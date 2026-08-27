@@ -29,9 +29,8 @@ from msa.validation.experiments.contracts import DatasetPartition
 from msa.validation.experiments.execution.contracts import (
     ExperimentCaseStatus,
     ExperimentFailureStage,
-    ExperimentFixedCutoffComparison,
+    ExperimentFixedCutoffCheckpoint,
     ExperimentMetricDeltaSummary,
-    ExperimentReplayComparison,
     FixedCutoffStatus,
     ReplayComparisonStatus,
 )
@@ -43,9 +42,6 @@ from msa.validation.experiments.execution.contracts_v2 import (
 )
 from msa.validation.experiments.execution.cutoff import (
     _checkpoint as _cutoff_checkpoint,
-)
-from msa.validation.experiments.execution.cutoff import (
-    _comparison as _cutoff_comparison,
 )
 from msa.validation.experiments.execution.cutoff import (
     _metric_cutoff_projection,
@@ -63,9 +59,6 @@ from msa.validation.experiments.execution.evidence_v2 import (
 from msa.validation.experiments.execution.manifest import (
     build_c008c_b_execution_manifest,
     load_c008c_b_authority,
-)
-from msa.validation.experiments.execution.replay import (
-    _comparison as _replay_comparison,
 )
 from msa.validation.experiments.execution.runner import (
     _determinism_v2,
@@ -87,28 +80,39 @@ from msa.validation.metrics import (
 
 from .contracts import (
     C008CCCaseResult,
+    C008CCFixedCutoffComparison,
     C008CCPartition,
+    C008CCReplayComparison,
 )
 
 
 SCHEMA_VERSION = 1
-EXECUTION_SEMANTICS = "C-008C-C-POST-FIX-LOCKED-SYNTHETIC-OOS-V1"
-BASE_MAIN_SHA = "6e031bd4f73364df1ff60743e3f011f78c45df63"
+EXECUTION_SEMANTICS = (
+    "C-008C-C-POST-EXPOSURE-SYNTHETIC-ENGINEERING-VALIDATION-V1"
+)
+BASE_MAIN_SHA = "9bb306f91c2d5063ee947dbf2d4bb4c91e7b50ef"
 LEGACY_CONTRACT_PATH = Path(
     "docs/validation/evidence/c008c_c_locked_oos_execution_contract.json"
 )
 LEGACY_ATTEMPT_PATH = Path(
     "docs/validation/evidence/c008c_c_locked_oos_attempt.json"
 )
-CONTRACT_PATH = Path(
+FAILED_POST_FIX_CONTRACT_PATH = Path(
     "docs/validation/evidence/"
     "c008c_c_post_fix_locked_oos_execution_contract.json"
 )
-ATTEMPT_PATH = Path(
+FAILED_POST_FIX_ATTEMPT_PATH = Path(
     "docs/validation/evidence/c008c_c_post_fix_locked_oos_attempt.json"
 )
+CONTRACT_PATH = Path(
+    "docs/validation/evidence/"
+    "c008c_c_post_exposure_execution_contract.json"
+)
+ATTEMPT_PATH = Path(
+    "docs/validation/evidence/c008c_c_post_exposure_attempt.json"
+)
 REPORT_PATH = Path(
-    "docs/validation/evidence/c008c_c_locked_oos_report.json"
+    "docs/validation/evidence/c008c_c_post_exposure_report.json"
 )
 B_V2_CONTRACT_PATH = Path(
     "docs/validation/evidence/c008c_b_v2_execution_contract.json"
@@ -346,6 +350,10 @@ def _contract_without_id(base: Path) -> dict[str, object]:
         "retry_allowed": False,
         "outcome_driven_selection_allowed": False,
         "real_market_oos_status": "NOT_RUN_NOT_EVIDENCED",
+        "validation_exposure_status": "POST_EXPOSURE",
+        "prior_primary_execution_count": 1,
+        "prior_primary_completed_pair_count": 130,
+        "pristine_locked_holdout": False,
         "c_source_locks": _c_source_locks(base),
         "historical_evidence_locks": _history_locks(base),
         "schema_version": SCHEMA_VERSION,
@@ -359,7 +367,7 @@ def build_c008c_c_execution_contract(
     payload = _contract_without_id(base)
     return {
         "execution_contract_id": semantic_id(
-            "c008c-c-post-fix-locked-oos-execution-contract-v1-", payload
+            "c008c-c-post-exposure-execution-contract-v1-", payload
         ),
         **payload,
     }
@@ -665,7 +673,70 @@ def _execute_oos_triplet(item: tuple[object, object, object]) -> tuple[object, .
     return normal_a.result, same, decimal, coverage_source
 
 
-def _execute_oos_replay(item: tuple[str, object, object]) -> object:
+def _c_replay_comparison(
+    *,
+    replay_sample_id: str,
+    case: object,
+    variant: object,
+    status: ReplayComparisonStatus,
+    batch_run: object | None,
+    replay_run: object | None,
+    comparison_audit: object | None,
+    batch_metric: object | None,
+    replay_metric: object | None,
+    run_equal: bool,
+    metric_equal: bool,
+    failure_error_type: str | None,
+) -> C008CCReplayComparison:
+    return C008CCReplayComparison.create(
+        replay_sample_id=replay_sample_id,
+        scope="BASELINE",
+        dataset_case_id=case.dataset_case_id,
+        variant_id=variant.variant_id,
+        partition=C008CCPartition.LOCKED_OOS,
+        scenario=case.scenario_kind,
+        seed=3,
+        status=status,
+        batch_run_id=None if batch_run is None else batch_run.run_id,
+        batch_run_payload_digest=(
+            None if batch_run is None else digest(batch_run.to_dict())
+        ),
+        replay_run_id=None if replay_run is None else replay_run.run_id,
+        replay_run_payload_digest=(
+            None if replay_run is None else digest(replay_run.to_dict())
+        ),
+        comparison_audit_id=(
+            None
+            if comparison_audit is None
+            else comparison_audit.audit_report_id
+        ),
+        comparison_audit_payload_digest=(
+            None
+            if comparison_audit is None
+            else digest(comparison_audit.to_dict())
+        ),
+        batch_metric_report_id=(
+            None if batch_metric is None else batch_metric.metric_report_id
+        ),
+        batch_metric_payload_digest=(
+            None if batch_metric is None else digest(batch_metric.to_dict())
+        ),
+        replay_metric_report_id=(
+            None if replay_metric is None else replay_metric.metric_report_id
+        ),
+        replay_metric_payload_digest=(
+            None if replay_metric is None else digest(replay_metric.to_dict())
+        ),
+        full_run_payload_equal=run_equal,
+        full_metric_payload_equal=metric_equal,
+        failure_error_type=failure_error_type,
+        schema_version=SCHEMA_VERSION,
+    )
+
+
+def _execute_oos_replay(
+    item: tuple[str, object, object],
+) -> C008CCReplayComparison:
     sample_id, case, baseline = item
     if case.seed != 3 or case.partition is not DatasetPartition.OOS:
         raise C008CCError("C replay schedule is not seed-3 OOS")
@@ -687,9 +758,8 @@ def _execute_oos_replay(item: tuple[str, object, object]) -> object:
         replay_metric = evaluator.evaluate(replay_run)
         validate_metric_evaluation_report(replay_run, replay_metric)
     except (MSACoreError, MSAValidationError, StructuralMetricError) as exc:
-        return _replay_comparison(
+        return _c_replay_comparison(
             replay_sample_id=sample_id,
-            scope="BASELINE",
             case=case,
             variant=baseline,
             status=ReplayComparisonStatus.EXECUTION_FAILED,
@@ -704,9 +774,8 @@ def _execute_oos_replay(item: tuple[str, object, object]) -> object:
         )
     run_equal = batch_run.to_dict() == replay_run.to_dict()
     metric_equal = batch_metric.to_dict() == replay_metric.to_dict()
-    return _replay_comparison(
+    return _c_replay_comparison(
         replay_sample_id=sample_id,
-        scope="BASELINE",
         case=case,
         variant=baseline,
         status=(
@@ -725,7 +794,32 @@ def _execute_oos_replay(item: tuple[str, object, object]) -> object:
     )
 
 
-def _execute_oos_cutoff(item: tuple[object, object]) -> object:
+def _c_cutoff_comparison(
+    *,
+    case: object,
+    baseline_variant_id: str,
+    status: FixedCutoffStatus,
+    checkpoints: tuple[ExperimentFixedCutoffCheckpoint, ...],
+    failure_error_type: str | None,
+) -> C008CCFixedCutoffComparison:
+    return C008CCFixedCutoffComparison.create(
+        dataset_case_id=case.dataset_case_id,
+        baseline_variant_id=baseline_variant_id,
+        partition=C008CCPartition.LOCKED_OOS,
+        scenario=case.scenario_kind,
+        seed=3,
+        status=status,
+        checkpoints=checkpoints,
+        stable_checkpoint_count=sum(item.stable for item in checkpoints),
+        rewrite_count=sum(not item.stable for item in checkpoints),
+        failure_error_type=failure_error_type,
+        schema_version=SCHEMA_VERSION,
+    )
+
+
+def _execute_oos_cutoff(
+    item: tuple[object, object],
+) -> C008CCFixedCutoffComparison:
     case, baseline = item
     if case.seed != 3 or case.partition is not DatasetPartition.OOS:
         raise C008CCError("C fixed-cutoff schedule is not seed-3 OOS")
@@ -769,7 +863,7 @@ def _execute_oos_cutoff(item: tuple[object, object]) -> object:
                 )
             )
     except (MSACoreError, MSAValidationError, StructuralMetricError, ValueError) as exc:
-        return _cutoff_comparison(
+        return _c_cutoff_comparison(
             case=case,
             baseline_variant_id=baseline.variant_id,
             status=FixedCutoffStatus.EXECUTION_FAILED,
@@ -777,7 +871,7 @@ def _execute_oos_cutoff(item: tuple[object, object]) -> object:
             failure_error_type=type(exc).__name__,
         )
     frozen = tuple(checkpoints)
-    return _cutoff_comparison(
+    return _c_cutoff_comparison(
         case=case,
         baseline_variant_id=baseline.variant_id,
         status=(
@@ -840,7 +934,9 @@ def _run_primary(
     return tuple(results), tuple(same), tuple(decimal), coverage_sources
 
 
-def _run_replay(base: Path, manifest: object) -> tuple[object, ...]:
+def _run_replay(
+    base: Path, manifest: object
+) -> tuple[C008CCReplayComparison, ...]:
     _, dataset, _, plan, _ = load_c008c_b_authority(base)
     cases = {item.dataset_case_id: item for item in dataset.cases}
     baseline = plan.variants[0]
@@ -852,7 +948,7 @@ def _run_replay(base: Path, manifest: object) -> tuple[object, ...]:
             strict=True,
         )
     )
-    results: list[object] = []
+    results: list[C008CCReplayComparison] = []
     with ProcessPoolExecutor(max_workers=_FORMAL_MAX_WORKERS) as executor:
         for index, result in enumerate(
             executor.map(_execute_oos_replay, scheduled), start=1
@@ -864,7 +960,9 @@ def _run_replay(base: Path, manifest: object) -> tuple[object, ...]:
     return tuple(results)
 
 
-def _run_cutoff(base: Path, manifest: object) -> tuple[object, ...]:
+def _run_cutoff(
+    base: Path, manifest: object
+) -> tuple[C008CCFixedCutoffComparison, ...]:
     _, dataset, _, plan, _ = load_c008c_b_authority(base)
     cases = {item.dataset_case_id: item for item in dataset.cases}
     baseline = plan.variants[0]
@@ -872,7 +970,7 @@ def _run_cutoff(base: Path, manifest: object) -> tuple[object, ...]:
         (cases[case_id], baseline)
         for case_id in manifest.deferred_fixed_cutoff_case_ids
     )
-    results: list[object] = []
+    results: list[C008CCFixedCutoffComparison] = []
     with ProcessPoolExecutor(max_workers=_FORMAL_MAX_WORKERS) as executor:
         for index, result in enumerate(
             executor.map(_execute_oos_cutoff, scheduled), start=1
@@ -1062,7 +1160,7 @@ def _degeneration_summaries(
     b_report: C008CBV2RunReport,
     case_results: tuple[C008CCCaseResult, ...],
     metric_deltas: tuple[ExperimentMetricDeltaSummary, ...],
-    c_cutoff: tuple[ExperimentFixedCutoffComparison, ...],
+    c_cutoff: tuple[C008CCFixedCutoffComparison, ...],
 ) -> tuple[list[dict[str, object]], dict[str, object]]:
     _, _, gates, plan, _ = load_c008c_b_authority(base)
     rule_codes = tuple(
@@ -1277,8 +1375,8 @@ def _gate_results(
     same: tuple[ExperimentDeterminismComparisonV2, ...],
     decimal: tuple[ExperimentDeterminismComparisonV2, ...],
     coverage: list[dict[str, object]],
-    replay: tuple[ExperimentReplayComparison, ...],
-    cutoff: tuple[ExperimentFixedCutoffComparison, ...],
+    replay: tuple[C008CCReplayComparison, ...],
+    cutoff: tuple[C008CCFixedCutoffComparison, ...],
     degeneration: list[dict[str, object]],
     global_degeneration: dict[str, object],
 ) -> list[dict[str, object]]:
@@ -1446,7 +1544,7 @@ def _attempt_payload(contract: Mapping[str, object]) -> dict[str, object]:
     }
     return {
         "attempt_id": semantic_id(
-            "c008c-c-post-fix-locked-oos-attempt-v1-", payload
+            "c008c-c-post-exposure-attempt-v1-", payload
         ),
         **payload,
     }
@@ -1463,8 +1561,8 @@ def _build_report(
     metric_deltas: tuple[ExperimentMetricDeltaSummary, ...],
     coverage_sources: list[dict[str, object]],
     coverage: list[dict[str, object]],
-    replay: tuple[ExperimentReplayComparison, ...],
-    cutoff: tuple[ExperimentFixedCutoffComparison, ...],
+    replay: tuple[C008CCReplayComparison, ...],
+    cutoff: tuple[C008CCFixedCutoffComparison, ...],
     degeneration: list[dict[str, object]],
     global_degeneration: dict[str, object],
 ) -> dict[str, object]:
@@ -1559,6 +1657,16 @@ def _build_report(
         "final_decision": "FREEZE_ELIGIBLE" if freeze_eligible else "BLOCKED",
         "freeze_eligible": freeze_eligible,
         "synthetic_oos_status": "COMPLETED",
+        "validation_exposure_status": contract[
+            "validation_exposure_status"
+        ],
+        "prior_primary_execution_count": contract[
+            "prior_primary_execution_count"
+        ],
+        "prior_primary_completed_pair_count": contract[
+            "prior_primary_completed_pair_count"
+        ],
+        "pristine_locked_holdout": contract["pristine_locked_holdout"],
         "formal_execution_count": 1,
         "retry_count": 0,
         "b_v2_rerun_performed": False,
@@ -1566,6 +1674,7 @@ def _build_report(
         "outcome_driven_selection_performed": False,
         "source_authority_status": "MATCHED_BEFORE_AND_AFTER",
         "limitations": [
+            "This is post-exposure synthetic engineering validation, not a pristine locked holdout.",
             "This is synthetic engineering OOS only.",
             "Real-market XAUUSD OOS remains NOT RUN / NOT EVIDENCED.",
             "No profitability or trading edge is claimed.",
@@ -1575,7 +1684,7 @@ def _build_report(
     }
     return {
         "run_report_id": semantic_id(
-            "c008c-c-post-fix-locked-oos-run-report-v1-", payload
+            "c008c-c-post-exposure-run-report-v1-", payload
         ),
         **payload,
     }
@@ -1588,8 +1697,8 @@ def _objects_from_report(
     tuple[ExperimentDeterminismComparisonV2, ...],
     tuple[ExperimentDeterminismComparisonV2, ...],
     tuple[ExperimentMetricDeltaSummary, ...],
-    tuple[ExperimentReplayComparison, ...],
-    tuple[ExperimentFixedCutoffComparison, ...],
+    tuple[C008CCReplayComparison, ...],
+    tuple[C008CCFixedCutoffComparison, ...],
 ]:
     try:
         return (
@@ -1610,11 +1719,11 @@ def _objects_from_report(
                 for item in payload["metric_delta_summaries"]  # type: ignore[index]
             ),
             tuple(
-                ExperimentReplayComparison.from_dict(item)
+                C008CCReplayComparison.from_dict(item)
                 for item in payload["replay_comparisons"]  # type: ignore[index]
             ),
             tuple(
-                ExperimentFixedCutoffComparison.from_dict(item)
+                C008CCFixedCutoffComparison.from_dict(item)
                 for item in payload["fixed_cutoff_comparisons"]  # type: ignore[index]
             ),
         )
@@ -1719,7 +1828,7 @@ def validate_c008c_c_report(
 def run_c008c_c_locked_oos(
     root: Path | None = None,
 ) -> tuple[Path, Path, dict[str, object], float]:
-    """Run exactly one formal seed-3 OOS attempt and write canonical Evidence."""
+    """Run one post-exposure seed-3 engineering validation attempt."""
 
     base = _root(root)
     contract = validate_c008c_c_preflight(base, require_clean=True)
@@ -1795,6 +1904,8 @@ __all__ = [
     "C008CCError",
     "CONTRACT_PATH",
     "EXECUTION_SEMANTICS",
+    "FAILED_POST_FIX_ATTEMPT_PATH",
+    "FAILED_POST_FIX_CONTRACT_PATH",
     "FORMAL_COMMAND",
     "LEGACY_ATTEMPT_PATH",
     "LEGACY_CONTRACT_PATH",
