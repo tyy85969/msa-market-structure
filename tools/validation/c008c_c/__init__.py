@@ -3,6 +3,8 @@
 from .architecture import (
     ATTEMPT_PATH,
     CONTRACT_PATH,
+    LEGACY_ATTEMPT_PATH,
+    LEGACY_CONTRACT_PATH,
     REPORT_PATH,
     check_existing_c008c_c_evidence,
     prepare_c008c_c_execution_contract,
@@ -17,6 +19,8 @@ __all__ = [
     "C008CCContractError",
     "C008CCPartition",
     "CONTRACT_PATH",
+    "LEGACY_ATTEMPT_PATH",
+    "LEGACY_CONTRACT_PATH",
     "REPORT_PATH",
     "check_existing_c008c_c_evidence",
     "prepare_c008c_c_execution_contract",
