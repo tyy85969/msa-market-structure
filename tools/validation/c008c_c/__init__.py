@@ -3,6 +3,8 @@
 from .architecture import (
     ATTEMPT_PATH,
     CONTRACT_PATH,
+    FAILED_POST_FIX_ATTEMPT_PATH,
+    FAILED_POST_FIX_CONTRACT_PATH,
     LEGACY_ATTEMPT_PATH,
     LEGACY_CONTRACT_PATH,
     REPORT_PATH,
@@ -11,14 +13,24 @@ from .architecture import (
     run_c008c_c_locked_oos,
     validate_c008c_c_preflight,
 )
-from .contracts import C008CCCaseResult, C008CCContractError, C008CCPartition
+from .contracts import (
+    C008CCCaseResult,
+    C008CCContractError,
+    C008CCFixedCutoffComparison,
+    C008CCPartition,
+    C008CCReplayComparison,
+)
 
 __all__ = [
     "ATTEMPT_PATH",
     "C008CCCaseResult",
     "C008CCContractError",
+    "C008CCFixedCutoffComparison",
     "C008CCPartition",
+    "C008CCReplayComparison",
     "CONTRACT_PATH",
+    "FAILED_POST_FIX_ATTEMPT_PATH",
+    "FAILED_POST_FIX_CONTRACT_PATH",
     "LEGACY_ATTEMPT_PATH",
     "LEGACY_CONTRACT_PATH",
     "REPORT_PATH",
