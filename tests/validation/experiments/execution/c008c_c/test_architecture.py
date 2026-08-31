@@ -20,6 +20,9 @@ LEGACY_ATTEMPT_SHA256 = (
 FAILED_POST_FIX_ATTEMPT_SHA256 = (
     "279db9e6f4be33ea78156020ed1703b707ac42d56418ac94eb0a12dd5968ae81"
 )
+FAILED_POST_EXPOSURE_ATTEMPT_SHA256 = (
+    "530d1dfc442568ff1925f341f0bf11d2fe94afea8203e8db62a1df5b4395b277"
+)
 
 
 @pytest.fixture(scope="module")
@@ -41,8 +44,12 @@ def test_contract_binds_only_the_frozen_locked_oos_schedule(
     assert contract["baseline_replay_count"] == 5
     assert contract["fixed_cutoff_count"] == 5
     assert contract["validation_exposure_status"] == "POST_EXPOSURE"
-    assert contract["prior_primary_execution_count"] == 1
-    assert contract["prior_primary_completed_pair_count"] == 130
+    assert contract["prior_primary_execution_count"] == 2
+    assert contract["prior_primary_completed_pair_count"] == 260
+    assert contract["prior_replay_execution_count"] == 1
+    assert contract["prior_replay_completed_case_count"] == 5
+    assert contract["prior_fixed_cutoff_execution_count"] == 1
+    assert contract["prior_fixed_cutoff_completed_case_count"] == 5
     assert contract["pristine_locked_holdout"] is False
     assert contract["oos_pair_ids"] == [
         item.execution_pair_id for item in manifest.deferred_oos_pairs
@@ -85,13 +92,19 @@ def test_contract_preserves_b_v2_source_scope(
     }
 
 
-def test_final_binding_preserves_both_failed_attempts(
+def test_final_binding_preserves_all_three_failed_attempts(
     contract: dict[str, object],
 ) -> None:
     legacy_attempt = ROOT / architecture.LEGACY_ATTEMPT_PATH
     legacy_contract = ROOT / architecture.LEGACY_CONTRACT_PATH
     failed_post_fix_attempt = ROOT / architecture.FAILED_POST_FIX_ATTEMPT_PATH
     failed_post_fix_contract = ROOT / architecture.FAILED_POST_FIX_CONTRACT_PATH
+    failed_post_exposure_attempt = (
+        ROOT / architecture.FAILED_POST_EXPOSURE_ATTEMPT_PATH
+    )
+    failed_post_exposure_contract = (
+        ROOT / architecture.FAILED_POST_EXPOSURE_CONTRACT_PATH
+    )
     historical = {
         item["relative_path"]: item["sha256"]
         for item in contract["historical_evidence_locks"]
@@ -100,6 +113,12 @@ def test_final_binding_preserves_both_failed_attempts(
     assert architecture.ATTEMPT_PATH != architecture.LEGACY_ATTEMPT_PATH
     assert architecture.CONTRACT_PATH != architecture.FAILED_POST_FIX_CONTRACT_PATH
     assert architecture.ATTEMPT_PATH != architecture.FAILED_POST_FIX_ATTEMPT_PATH
+    assert architecture.CONTRACT_PATH != (
+        architecture.FAILED_POST_EXPOSURE_CONTRACT_PATH
+    )
+    assert architecture.ATTEMPT_PATH != (
+        architecture.FAILED_POST_EXPOSURE_ATTEMPT_PATH
+    )
     assert hashlib.sha256(legacy_attempt.read_bytes()).hexdigest() == (
         LEGACY_ATTEMPT_SHA256
     )
@@ -118,6 +137,16 @@ def test_final_binding_preserves_both_failed_attempts(
     assert historical[architecture.FAILED_POST_FIX_CONTRACT_PATH.as_posix()] == (
         hashlib.sha256(failed_post_fix_contract.read_bytes()).hexdigest()
     )
+    assert (
+        hashlib.sha256(failed_post_exposure_attempt.read_bytes()).hexdigest()
+        == FAILED_POST_EXPOSURE_ATTEMPT_SHA256
+    )
+    assert historical[
+        architecture.FAILED_POST_EXPOSURE_ATTEMPT_PATH.as_posix()
+    ] == FAILED_POST_EXPOSURE_ATTEMPT_SHA256
+    assert historical[
+        architecture.FAILED_POST_EXPOSURE_CONTRACT_PATH.as_posix()
+    ] == hashlib.sha256(failed_post_exposure_contract.read_bytes()).hexdigest()
 
 
 def test_final_contract_binds_current_c_sources(
