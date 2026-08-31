@@ -11,7 +11,7 @@ from __future__ import annotations
 from concurrent.futures import ProcessPoolExecutor
 from dataclasses import dataclass
 from datetime import timedelta
-from decimal import ROUND_FLOOR, ROUND_HALF_EVEN, localcontext
+from decimal import Decimal, ROUND_FLOOR, ROUND_HALF_EVEN, localcontext
 import hashlib
 import json
 import os
@@ -30,8 +30,8 @@ from msa.validation.experiments.execution.contracts import (
     ExperimentCaseStatus,
     ExperimentFailureStage,
     ExperimentFixedCutoffCheckpoint,
-    ExperimentMetricDeltaSummary,
     FixedCutoffStatus,
+    MetricDeltaStatus,
     ReplayComparisonStatus,
 )
 from msa.validation.experiments.execution.contracts_v2 import (
@@ -46,12 +46,6 @@ from msa.validation.experiments.execution.cutoff import (
 from msa.validation.experiments.execution.cutoff import (
     _metric_cutoff_projection,
     _truncate_source,
-)
-from msa.validation.experiments.execution.deltas import (
-    _delta as _metric_delta,
-)
-from msa.validation.experiments.execution.deltas import (
-    _summary as _metric_delta_summary,
 )
 from msa.validation.experiments.execution.evidence_v2 import (
     check_existing_c008c_b_v2_evidence,
@@ -70,6 +64,7 @@ from msa.validation.experiments.identity import (
     semantic_id,
 )
 from msa.validation.metrics import (
+    MetricAggregateStatus,
     MetricEvaluationReport,
     StructuralMetricAggregate,
     StructuralMetricError,
@@ -81,6 +76,8 @@ from msa.validation.metrics import (
 from .contracts import (
     C008CCCaseResult,
     C008CCFixedCutoffComparison,
+    C008CCMetricDelta,
+    C008CCMetricDeltaSummary,
     C008CCPartition,
     C008CCReplayComparison,
 )
@@ -88,9 +85,9 @@ from .contracts import (
 
 SCHEMA_VERSION = 1
 EXECUTION_SEMANTICS = (
-    "C-008C-C-POST-EXPOSURE-SYNTHETIC-ENGINEERING-VALIDATION-V1"
+    "C-008C-C-POST-EXPOSURE-SYNTHETIC-ENGINEERING-VALIDATION-V2"
 )
-BASE_MAIN_SHA = "9bb306f91c2d5063ee947dbf2d4bb4c91e7b50ef"
+BASE_MAIN_SHA = "065677befd25cb242965096ed0035d37aca824d7"
 LEGACY_CONTRACT_PATH = Path(
     "docs/validation/evidence/c008c_c_locked_oos_execution_contract.json"
 )
@@ -104,15 +101,21 @@ FAILED_POST_FIX_CONTRACT_PATH = Path(
 FAILED_POST_FIX_ATTEMPT_PATH = Path(
     "docs/validation/evidence/c008c_c_post_fix_locked_oos_attempt.json"
 )
-CONTRACT_PATH = Path(
-    "docs/validation/evidence/"
-    "c008c_c_post_exposure_execution_contract.json"
+FAILED_POST_EXPOSURE_CONTRACT_PATH = Path(
+    "docs/validation/evidence/c008c_c_post_exposure_execution_contract.json"
 )
-ATTEMPT_PATH = Path(
+FAILED_POST_EXPOSURE_ATTEMPT_PATH = Path(
     "docs/validation/evidence/c008c_c_post_exposure_attempt.json"
 )
+CONTRACT_PATH = Path(
+    "docs/validation/evidence/"
+    "c008c_c_post_exposure_v2_execution_contract.json"
+)
+ATTEMPT_PATH = Path(
+    "docs/validation/evidence/c008c_c_post_exposure_v2_attempt.json"
+)
 REPORT_PATH = Path(
-    "docs/validation/evidence/c008c_c_post_exposure_report.json"
+    "docs/validation/evidence/c008c_c_post_exposure_v2_report.json"
 )
 B_V2_CONTRACT_PATH = Path(
     "docs/validation/evidence/c008c_b_v2_execution_contract.json"
@@ -351,8 +354,12 @@ def _contract_without_id(base: Path) -> dict[str, object]:
         "outcome_driven_selection_allowed": False,
         "real_market_oos_status": "NOT_RUN_NOT_EVIDENCED",
         "validation_exposure_status": "POST_EXPOSURE",
-        "prior_primary_execution_count": 1,
-        "prior_primary_completed_pair_count": 130,
+        "prior_primary_execution_count": 2,
+        "prior_primary_completed_pair_count": 260,
+        "prior_replay_execution_count": 1,
+        "prior_replay_completed_case_count": 5,
+        "prior_fixed_cutoff_execution_count": 1,
+        "prior_fixed_cutoff_completed_case_count": 5,
         "pristine_locked_holdout": False,
         "c_source_locks": _c_source_locks(base),
         "historical_evidence_locks": _history_locks(base),
@@ -367,7 +374,7 @@ def build_c008c_c_execution_contract(
     payload = _contract_without_id(base)
     return {
         "execution_contract_id": semantic_id(
-            "c008c-c-post-exposure-execution-contract-v1-", payload
+            "c008c-c-post-exposure-execution-contract-v2-", payload
         ),
         **payload,
     }
@@ -982,10 +989,107 @@ def _run_cutoff(
     return tuple(results)
 
 
+def _c_metric_delta(
+    baseline: C008CCCaseResult,
+    variant: C008CCCaseResult,
+    metric_name: object,
+    formula_id: str,
+) -> C008CCMetricDelta:
+    """Apply the frozen B delta algorithm to C-owned locked-OOS outcomes."""
+
+    baseline_aggregate = {
+        item.metric_name: item for item in baseline.aggregates
+    }.get(metric_name)
+    variant_aggregate = {
+        item.metric_name: item for item in variant.aggregates
+    }.get(metric_name)
+    baseline_status = (
+        None
+        if baseline_aggregate is None
+        else baseline_aggregate.aggregate_status
+    )
+    variant_status = (
+        None
+        if variant_aggregate is None
+        else variant_aggregate.aggregate_status
+    )
+    baseline_value = (
+        None if baseline_aggregate is None else baseline_aggregate.value
+    )
+    variant_value = (
+        None if variant_aggregate is None else variant_aggregate.value
+    )
+    baseline_available = (
+        baseline_status is MetricAggregateStatus.AVAILABLE
+        and baseline_value is not None
+    )
+    variant_available = (
+        variant_status is MetricAggregateStatus.AVAILABLE
+        and variant_value is not None
+    )
+    status = (
+        MetricDeltaStatus.COMPARABLE
+        if baseline_available and variant_available
+        else MetricDeltaStatus.BASELINE_UNAVAILABLE
+        if not baseline_available and variant_available
+        else MetricDeltaStatus.VARIANT_UNAVAILABLE
+        if baseline_available and not variant_available
+        else MetricDeltaStatus.BOTH_UNAVAILABLE
+    )
+    absolute_delta = (
+        variant_value - baseline_value
+        if status is MetricDeltaStatus.COMPARABLE
+        else None
+    )
+    return C008CCMetricDelta.create(
+        dataset_case_id=baseline.dataset_case_id,
+        partition=C008CCPartition.LOCKED_OOS,
+        scenario=baseline.scenario,
+        variant_id=variant.variant_id,
+        baseline_variant_id=baseline.variant_id,
+        metric_name=metric_name,
+        formula_id=formula_id,
+        baseline_aggregate_status=baseline_status,
+        variant_aggregate_status=variant_status,
+        baseline_value=baseline_value,
+        variant_value=variant_value,
+        absolute_delta=absolute_delta,
+        delta_status=status,
+        schema_version=SCHEMA_VERSION,
+    )
+
+
+def _c_metric_delta_summary(
+    variant_id: str,
+    baseline_variant_id: str,
+    deltas: tuple[C008CCMetricDelta, ...],
+) -> C008CCMetricDeltaSummary:
+    comparable = tuple(
+        item
+        for item in deltas
+        if item.delta_status is MetricDeltaStatus.COMPARABLE
+    )
+    return C008CCMetricDeltaSummary.create(
+        partition=C008CCPartition.LOCKED_OOS,
+        variant_id=variant_id,
+        baseline_variant_id=baseline_variant_id,
+        metric_deltas=deltas,
+        comparable_count=len(comparable),
+        equal_count=sum(
+            item.absolute_delta == Decimal("0") for item in comparable
+        ),
+        non_zero_count=sum(
+            item.absolute_delta != Decimal("0") for item in comparable
+        ),
+        unavailable_count=len(deltas) - len(comparable),
+        schema_version=SCHEMA_VERSION,
+    )
+
+
 def _oos_metric_deltas(
     base: Path,
     case_results: tuple[C008CCCaseResult, ...],
-) -> tuple[ExperimentMetricDeltaSummary, ...]:
+) -> tuple[C008CCMetricDeltaSummary, ...]:
     _, dataset, _, plan, _ = load_c008c_b_authority(base)
     oos_case_ids = tuple(
         item.dataset_case_id
@@ -1000,10 +1104,10 @@ def _oos_metric_deltas(
     if len(index) != 130:
         raise C008CCError("OOS metric deltas require 130 unique CaseResults")
     formulas = default_metric_formula_registry()
-    summaries: list[ExperimentMetricDeltaSummary] = []
+    summaries: list[C008CCMetricDeltaSummary] = []
     for variant in plan.variants[1:]:
         deltas = tuple(
-            _metric_delta(
+            _c_metric_delta(
                 index[(case_id, baseline_id)],
                 index[(case_id, variant.variant_id)],
                 formula.metric_name,
@@ -1013,8 +1117,7 @@ def _oos_metric_deltas(
             for formula in formulas
         )
         summaries.append(
-            _metric_delta_summary(
-                DatasetPartition.OOS,
+            _c_metric_delta_summary(
                 variant.variant_id,
                 baseline_id,
                 deltas,
@@ -1159,7 +1262,7 @@ def _degeneration_summaries(
     base: Path,
     b_report: C008CBV2RunReport,
     case_results: tuple[C008CCCaseResult, ...],
-    metric_deltas: tuple[ExperimentMetricDeltaSummary, ...],
+    metric_deltas: tuple[C008CCMetricDeltaSummary, ...],
     c_cutoff: tuple[C008CCFixedCutoffComparison, ...],
 ) -> tuple[list[dict[str, object]], dict[str, object]]:
     _, _, gates, plan, _ = load_c008c_b_authority(base)
@@ -1544,7 +1647,7 @@ def _attempt_payload(contract: Mapping[str, object]) -> dict[str, object]:
     }
     return {
         "attempt_id": semantic_id(
-            "c008c-c-post-exposure-attempt-v1-", payload
+            "c008c-c-post-exposure-attempt-v2-", payload
         ),
         **payload,
     }
@@ -1558,7 +1661,7 @@ def _build_report(
     case_results: tuple[C008CCCaseResult, ...],
     same: tuple[ExperimentDeterminismComparisonV2, ...],
     decimal: tuple[ExperimentDeterminismComparisonV2, ...],
-    metric_deltas: tuple[ExperimentMetricDeltaSummary, ...],
+    metric_deltas: tuple[C008CCMetricDeltaSummary, ...],
     coverage_sources: list[dict[str, object]],
     coverage: list[dict[str, object]],
     replay: tuple[C008CCReplayComparison, ...],
@@ -1666,6 +1769,18 @@ def _build_report(
         "prior_primary_completed_pair_count": contract[
             "prior_primary_completed_pair_count"
         ],
+        "prior_replay_execution_count": contract[
+            "prior_replay_execution_count"
+        ],
+        "prior_replay_completed_case_count": contract[
+            "prior_replay_completed_case_count"
+        ],
+        "prior_fixed_cutoff_execution_count": contract[
+            "prior_fixed_cutoff_execution_count"
+        ],
+        "prior_fixed_cutoff_completed_case_count": contract[
+            "prior_fixed_cutoff_completed_case_count"
+        ],
         "pristine_locked_holdout": contract["pristine_locked_holdout"],
         "formal_execution_count": 1,
         "retry_count": 0,
@@ -1684,7 +1799,7 @@ def _build_report(
     }
     return {
         "run_report_id": semantic_id(
-            "c008c-c-post-exposure-run-report-v1-", payload
+            "c008c-c-post-exposure-run-report-v2-", payload
         ),
         **payload,
     }
@@ -1696,7 +1811,7 @@ def _objects_from_report(
     tuple[C008CCCaseResult, ...],
     tuple[ExperimentDeterminismComparisonV2, ...],
     tuple[ExperimentDeterminismComparisonV2, ...],
-    tuple[ExperimentMetricDeltaSummary, ...],
+    tuple[C008CCMetricDeltaSummary, ...],
     tuple[C008CCReplayComparison, ...],
     tuple[C008CCFixedCutoffComparison, ...],
 ]:
@@ -1715,7 +1830,7 @@ def _objects_from_report(
                 for item in payload["decimal_context_comparisons"]  # type: ignore[index]
             ),
             tuple(
-                ExperimentMetricDeltaSummary.from_dict(item)
+                C008CCMetricDeltaSummary.from_dict(item)
                 for item in payload["metric_delta_summaries"]  # type: ignore[index]
             ),
             tuple(
@@ -1906,6 +2021,8 @@ __all__ = [
     "EXECUTION_SEMANTICS",
     "FAILED_POST_FIX_ATTEMPT_PATH",
     "FAILED_POST_FIX_CONTRACT_PATH",
+    "FAILED_POST_EXPOSURE_ATTEMPT_PATH",
+    "FAILED_POST_EXPOSURE_CONTRACT_PATH",
     "FORMAL_COMMAND",
     "LEGACY_ATTEMPT_PATH",
     "LEGACY_CONTRACT_PATH",

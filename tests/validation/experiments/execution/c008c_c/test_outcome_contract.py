@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import inspect
+from decimal import Decimal
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -10,6 +11,8 @@ from c008c_c import architecture
 from c008c_c.contracts import (
     C008CCCaseResult,
     C008CCFixedCutoffComparison,
+    C008CCMetricDelta,
+    C008CCMetricDeltaSummary,
     C008CCPartition,
     C008CCReplayComparison,
 )
@@ -19,10 +22,14 @@ from msa.validation.experiments.execution.contracts import (
     ExperimentCaseStatus,
     ExperimentFailureStage,
     ExperimentFixedCutoffComparison,
+    ExperimentMetricDelta,
+    ExperimentMetricDeltaSummary,
     ExperimentReplayComparison,
     FixedCutoffStatus,
+    MetricDeltaStatus,
     ReplayComparisonStatus,
 )
+from msa.validation.contracts import SyntheticScenarioKind
 from msa.validation.experiments.execution.errors import (
     C008CBCaseError,
     C008CBComparisonError,
@@ -31,6 +38,7 @@ from msa.validation.experiments.execution.manifest import (
     build_c008c_b_execution_manifest,
     load_c008c_b_authority,
 )
+from msa.validation.metrics import MetricAggregateStatus, default_metric_formula_registry
 
 
 ROOT = Path(__file__).resolve().parents[5]
@@ -126,6 +134,105 @@ def test_c_case_result_accepts_only_locked_oos_seed_3(
     assert result.execution_status is ExperimentCaseStatus.PIPELINE_FAILED
     assert result.case_result_id.startswith("c008c-c-case-result-v1-")
     assert C008CCCaseResult.from_dict(result.to_dict()) == result
+
+
+def test_b_metric_delta_contracts_still_reject_oos(
+    locked_authority: tuple[object, object],
+) -> None:
+    pair, _ = locked_authority
+    formula = default_metric_formula_registry()[0]
+    with pytest.raises(
+        C008CBComparisonError,
+        match="metric delta partition must be DEVELOPMENT/VALIDATION",
+    ):
+        ExperimentMetricDelta(
+            metric_delta_id="must-reject-before-identity-check",
+            dataset_case_id=pair.dataset_case_id,
+            partition=DatasetPartition.OOS,
+            scenario=pair.scenario,
+            variant_id="variant-id",
+            baseline_variant_id="baseline-id",
+            metric_name=formula.metric_name,
+            formula_id=formula.metric_formula_id,
+            baseline_aggregate_status=MetricAggregateStatus.AVAILABLE,
+            variant_aggregate_status=MetricAggregateStatus.AVAILABLE,
+            baseline_value=Decimal("1"),
+            variant_value=Decimal("2"),
+            absolute_delta=Decimal("1"),
+            delta_status=MetricDeltaStatus.COMPARABLE,
+        )
+    with pytest.raises(
+        C008CBComparisonError,
+        match="delta summary partition must be B-stage partition",
+    ):
+        ExperimentMetricDeltaSummary(
+            metric_delta_summary_id="must-reject-before-identity-check",
+            partition=DatasetPartition.OOS,
+            variant_id="variant-id",
+            baseline_variant_id="baseline-id",
+            metric_deltas=(),
+            comparable_count=0,
+            equal_count=0,
+            non_zero_count=0,
+            unavailable_count=0,
+        )
+
+
+def _c_metric_delta(
+    *,
+    case_id: str,
+    scenario: object,
+    variant_id: str,
+    baseline_id: str,
+    metric_name: object,
+    formula_id: str,
+) -> C008CCMetricDelta:
+    return C008CCMetricDelta.create(
+        dataset_case_id=case_id,
+        partition=C008CCPartition.LOCKED_OOS,
+        scenario=scenario,
+        variant_id=variant_id,
+        baseline_variant_id=baseline_id,
+        metric_name=metric_name,
+        formula_id=formula_id,
+        baseline_aggregate_status=MetricAggregateStatus.AVAILABLE,
+        variant_aggregate_status=MetricAggregateStatus.AVAILABLE,
+        baseline_value=Decimal("1"),
+        variant_value=Decimal("2"),
+        absolute_delta=Decimal("1"),
+        delta_status=MetricDeltaStatus.COMPARABLE,
+        schema_version=1,
+    )
+
+
+def test_c_metric_delta_contracts_accept_only_locked_oos() -> None:
+    formulas = default_metric_formula_registry()
+    deltas = tuple(
+        _c_metric_delta(
+            case_id=f"case-{case_index}",
+            scenario=next(iter(SyntheticScenarioKind)),
+            variant_id="variant-id",
+            baseline_id="baseline-id",
+            metric_name=formula.metric_name,
+            formula_id=formula.metric_formula_id,
+        )
+        for case_index in range(5)
+        for formula in formulas
+    )
+    summary = C008CCMetricDeltaSummary.create(
+        partition=C008CCPartition.LOCKED_OOS,
+        variant_id="variant-id",
+        baseline_variant_id="baseline-id",
+        metric_deltas=deltas,
+        comparable_count=50,
+        equal_count=0,
+        non_zero_count=50,
+        unavailable_count=0,
+        schema_version=1,
+    )
+    assert len(deltas) == 50
+    assert C008CCMetricDelta.from_dict(deltas[0].to_dict()) == deltas[0]
+    assert C008CCMetricDeltaSummary.from_dict(summary.to_dict()) == summary
 
 
 def test_c_runner_has_no_b_case_result_constructor_dependency(
@@ -289,6 +396,8 @@ def test_c_runner_and_report_use_only_c_owned_oos_containers() -> None:
     assert "ExperimentReplayComparison.from_dict" not in report_source
     assert "C008CCFixedCutoffComparison.from_dict" in report_source
     assert "ExperimentFixedCutoffComparison.from_dict" not in report_source
+    assert "C008CCMetricDeltaSummary.from_dict" in report_source
+    assert "ExperimentMetricDeltaSummary.from_dict" not in report_source
 
 
 def test_mock_c_flow_assembles_and_deserializes_without_b_oos_wrappers(
@@ -324,8 +433,12 @@ def test_mock_c_flow_assembles_and_deserializes_without_b_oos_wrappers(
         "oos_case_ids": [pair.dataset_case_id],
         "variant_ids": [variant.variant_id],
         "validation_exposure_status": "POST_EXPOSURE",
-        "prior_primary_execution_count": 1,
-        "prior_primary_completed_pair_count": 130,
+        "prior_primary_execution_count": 2,
+        "prior_primary_completed_pair_count": 260,
+        "prior_replay_execution_count": 1,
+        "prior_replay_completed_case_count": 5,
+        "prior_fixed_cutoff_execution_count": 1,
+        "prior_fixed_cutoff_completed_case_count": 5,
         "pristine_locked_holdout": False,
     }
     b_report = SimpleNamespace(

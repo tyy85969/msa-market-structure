@@ -4,10 +4,11 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass, fields
+from decimal import Decimal, InvalidOperation
 from enum import Enum
 from typing import Any, ClassVar, Self
 
-from msa.validation.contracts import SyntheticScenarioKind
+from msa.validation.contracts import SyntheticScenarioKind, ValidationMetricName
 from msa.validation.experiments.contracts import ExperimentKind, VariantLevel
 from msa.validation.experiments.execution.contracts import (
     ExperimentCaseStatus,
@@ -15,9 +16,11 @@ from msa.validation.experiments.execution.contracts import (
     ExperimentFixedCutoffCheckpoint,
     FixedCutoffStatus,
     MetricAggregateSnapshot,
+    MetricDeltaStatus,
     ReplayComparisonStatus,
 )
 from msa.validation.experiments.identity import semantic_id
+from msa.validation.metrics import MetricAggregateStatus
 
 
 SCHEMA_VERSION = 1
@@ -48,6 +51,28 @@ def _count(value: object, field_name: str) -> None:
 def _boolean(value: object, field_name: str) -> None:
     if type(value) is not bool:
         raise C008CCContractError(f"{field_name} must be bool")
+
+
+def _optional_decimal(value: object, field_name: str) -> Decimal | None:
+    if value is None:
+        return None
+    if not isinstance(value, Decimal) or not value.is_finite():
+        raise C008CCContractError(f"{field_name} must be finite Decimal or None")
+    return value
+
+
+def _parse_optional_decimal(value: object, field_name: str) -> Decimal | None:
+    if value is None:
+        return None
+    if not isinstance(value, str) or not value:
+        raise C008CCContractError(f"{field_name} must be Decimal text or None")
+    try:
+        parsed = Decimal(value)
+    except (InvalidOperation, ValueError) as exc:
+        raise C008CCContractError(
+            f"{field_name} contains invalid Decimal text"
+        ) from exc
+    return _optional_decimal(parsed, field_name)
 
 
 @dataclass(frozen=True, slots=True)
@@ -346,6 +371,409 @@ class C008CCCaseResult:
                 raise
             raise C008CCContractError(
                 "serialized C CaseResult is invalid"
+            ) from exc
+
+
+@dataclass(frozen=True, slots=True)
+class C008CCMetricDelta:
+    """One descriptive locked-OOS metric delta owned by C-008C-C."""
+
+    metric_delta_id: str
+    dataset_case_id: str
+    partition: C008CCPartition
+    scenario: SyntheticScenarioKind
+    variant_id: str
+    baseline_variant_id: str
+    metric_name: ValidationMetricName
+    formula_id: str
+    baseline_aggregate_status: MetricAggregateStatus | None
+    variant_aggregate_status: MetricAggregateStatus | None
+    baseline_value: Decimal | None
+    variant_value: Decimal | None
+    absolute_delta: Decimal | None
+    delta_status: MetricDeltaStatus
+    schema_version: int = SCHEMA_VERSION
+
+    _PREFIX: ClassVar[str] = "c008c-c-metric-delta-v1-"
+
+    def __post_init__(self) -> None:
+        if self.schema_version != SCHEMA_VERSION:
+            raise C008CCContractError(
+                "C MetricDelta schema_version must be 1"
+            )
+        for field_name in (
+            "metric_delta_id",
+            "dataset_case_id",
+            "variant_id",
+            "baseline_variant_id",
+            "formula_id",
+        ):
+            _text(getattr(self, field_name), field_name)
+        if self.variant_id == self.baseline_variant_id:
+            raise C008CCContractError(
+                "C metric delta variant must be non-Baseline"
+            )
+        if self.partition is not C008CCPartition.LOCKED_OOS:
+            raise C008CCContractError(
+                "C MetricDelta partition must be LOCKED_OOS"
+            )
+        if not isinstance(self.scenario, SyntheticScenarioKind):
+            raise C008CCContractError("scenario must be SyntheticScenarioKind")
+        if not isinstance(self.metric_name, ValidationMetricName):
+            raise C008CCContractError(
+                "metric_name must be ValidationMetricName"
+            )
+        for field_name in (
+            "baseline_aggregate_status",
+            "variant_aggregate_status",
+        ):
+            value = getattr(self, field_name)
+            if value is not None and not isinstance(
+                value, MetricAggregateStatus
+            ):
+                raise C008CCContractError(
+                    f"{field_name} must be MetricAggregateStatus or None"
+                )
+        baseline = _optional_decimal(self.baseline_value, "baseline_value")
+        variant = _optional_decimal(self.variant_value, "variant_value")
+        delta = _optional_decimal(self.absolute_delta, "absolute_delta")
+        if not isinstance(self.delta_status, MetricDeltaStatus):
+            raise C008CCContractError(
+                "delta_status must be MetricDeltaStatus"
+            )
+        baseline_available = (
+            self.baseline_aggregate_status is MetricAggregateStatus.AVAILABLE
+            and baseline is not None
+        )
+        variant_available = (
+            self.variant_aggregate_status is MetricAggregateStatus.AVAILABLE
+            and variant is not None
+        )
+        expected_status = (
+            MetricDeltaStatus.COMPARABLE
+            if baseline_available and variant_available
+            else MetricDeltaStatus.BASELINE_UNAVAILABLE
+            if not baseline_available and variant_available
+            else MetricDeltaStatus.VARIANT_UNAVAILABLE
+            if baseline_available and not variant_available
+            else MetricDeltaStatus.BOTH_UNAVAILABLE
+        )
+        if self.delta_status is not expected_status:
+            raise C008CCContractError(
+                "delta status contradicts aggregate availability"
+            )
+        if expected_status is MetricDeltaStatus.COMPARABLE:
+            if delta != variant - baseline:
+                raise C008CCContractError(
+                    "absolute_delta must equal variant minus baseline"
+                )
+        elif delta is not None:
+            raise C008CCContractError("unavailable delta must be None")
+        if self.metric_delta_id != semantic_id(
+            self._PREFIX, self._identity_payload()
+        ):
+            raise C008CCContractError(
+                "C MetricDelta identity is not canonical"
+            )
+
+    def _identity_payload(self) -> dict[str, object]:
+        payload = self.to_dict()
+        del payload["metric_delta_id"]
+        return payload
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "metric_delta_id": self.metric_delta_id,
+            "dataset_case_id": self.dataset_case_id,
+            "partition": self.partition.value,
+            "scenario": self.scenario.value,
+            "variant_id": self.variant_id,
+            "baseline_variant_id": self.baseline_variant_id,
+            "metric_name": self.metric_name.value,
+            "formula_id": self.formula_id,
+            "baseline_aggregate_status": (
+                None
+                if self.baseline_aggregate_status is None
+                else self.baseline_aggregate_status.value
+            ),
+            "variant_aggregate_status": (
+                None
+                if self.variant_aggregate_status is None
+                else self.variant_aggregate_status.value
+            ),
+            "baseline_value": (
+                None if self.baseline_value is None else str(self.baseline_value)
+            ),
+            "variant_value": (
+                None if self.variant_value is None else str(self.variant_value)
+            ),
+            "absolute_delta": (
+                None if self.absolute_delta is None else str(self.absolute_delta)
+            ),
+            "delta_status": self.delta_status.value,
+            "schema_version": self.schema_version,
+        }
+
+    @classmethod
+    def create(cls, **kwargs: object) -> Self:
+        payload = {
+            "dataset_case_id": kwargs["dataset_case_id"],
+            "partition": kwargs["partition"].value,  # type: ignore[union-attr]
+            "scenario": kwargs["scenario"].value,  # type: ignore[union-attr]
+            "variant_id": kwargs["variant_id"],
+            "baseline_variant_id": kwargs["baseline_variant_id"],
+            "metric_name": kwargs["metric_name"].value,  # type: ignore[union-attr]
+            "formula_id": kwargs["formula_id"],
+            "baseline_aggregate_status": (
+                None
+                if kwargs["baseline_aggregate_status"] is None
+                else kwargs["baseline_aggregate_status"].value  # type: ignore[union-attr]
+            ),
+            "variant_aggregate_status": (
+                None
+                if kwargs["variant_aggregate_status"] is None
+                else kwargs["variant_aggregate_status"].value  # type: ignore[union-attr]
+            ),
+            "baseline_value": (
+                None
+                if kwargs["baseline_value"] is None
+                else str(kwargs["baseline_value"])
+            ),
+            "variant_value": (
+                None
+                if kwargs["variant_value"] is None
+                else str(kwargs["variant_value"])
+            ),
+            "absolute_delta": (
+                None
+                if kwargs["absolute_delta"] is None
+                else str(kwargs["absolute_delta"])
+            ),
+            "delta_status": kwargs["delta_status"].value,  # type: ignore[union-attr]
+            "schema_version": kwargs.get("schema_version", SCHEMA_VERSION),
+        }
+        return cls(
+            metric_delta_id=semantic_id(cls._PREFIX, payload),
+            **kwargs,
+        )
+
+    @classmethod
+    def from_dict(cls, payload: Mapping[str, Any]) -> Self:
+        if set(payload) != {item.name for item in fields(cls)}:
+            raise C008CCContractError(
+                "serialized C MetricDelta fields are invalid"
+            )
+        try:
+            return cls(
+                metric_delta_id=payload["metric_delta_id"],
+                dataset_case_id=payload["dataset_case_id"],
+                partition=C008CCPartition(payload["partition"]),
+                scenario=SyntheticScenarioKind(payload["scenario"]),
+                variant_id=payload["variant_id"],
+                baseline_variant_id=payload["baseline_variant_id"],
+                metric_name=ValidationMetricName(payload["metric_name"]),
+                formula_id=payload["formula_id"],
+                baseline_aggregate_status=(
+                    None
+                    if payload["baseline_aggregate_status"] is None
+                    else MetricAggregateStatus(
+                        payload["baseline_aggregate_status"]
+                    )
+                ),
+                variant_aggregate_status=(
+                    None
+                    if payload["variant_aggregate_status"] is None
+                    else MetricAggregateStatus(
+                        payload["variant_aggregate_status"]
+                    )
+                ),
+                baseline_value=_parse_optional_decimal(
+                    payload["baseline_value"], "baseline_value"
+                ),
+                variant_value=_parse_optional_decimal(
+                    payload["variant_value"], "variant_value"
+                ),
+                absolute_delta=_parse_optional_decimal(
+                    payload["absolute_delta"], "absolute_delta"
+                ),
+                delta_status=MetricDeltaStatus(payload["delta_status"]),
+                schema_version=payload["schema_version"],
+            )
+        except (KeyError, TypeError, ValueError) as exc:
+            if isinstance(exc, C008CCContractError):
+                raise
+            raise C008CCContractError(
+                "serialized C MetricDelta is invalid"
+            ) from exc
+
+
+@dataclass(frozen=True, slots=True)
+class C008CCMetricDeltaSummary:
+    """All 50 locked-OOS metric deltas for one non-Baseline Variant."""
+
+    metric_delta_summary_id: str
+    partition: C008CCPartition
+    variant_id: str
+    baseline_variant_id: str
+    metric_deltas: tuple[C008CCMetricDelta, ...]
+    comparable_count: int
+    equal_count: int
+    non_zero_count: int
+    unavailable_count: int
+    schema_version: int = SCHEMA_VERSION
+
+    _PREFIX: ClassVar[str] = "c008c-c-metric-delta-summary-v1-"
+
+    def __post_init__(self) -> None:
+        if self.schema_version != SCHEMA_VERSION:
+            raise C008CCContractError(
+                "C MetricDeltaSummary schema_version must be 1"
+            )
+        for field_name in (
+            "metric_delta_summary_id",
+            "variant_id",
+            "baseline_variant_id",
+        ):
+            _text(getattr(self, field_name), field_name)
+        if self.variant_id == self.baseline_variant_id:
+            raise C008CCContractError(
+                "C metric delta summary variant must be non-Baseline"
+            )
+        if self.partition is not C008CCPartition.LOCKED_OOS:
+            raise C008CCContractError(
+                "C MetricDeltaSummary partition must be LOCKED_OOS"
+            )
+        if (
+            not isinstance(self.metric_deltas, tuple)
+            or len(self.metric_deltas) != 50
+            or any(
+                not isinstance(item, C008CCMetricDelta)
+                for item in self.metric_deltas
+            )
+        ):
+            raise C008CCContractError(
+                "C metric delta summary must contain 50 MetricDeltas"
+            )
+        if any(
+            item.partition is not self.partition
+            or item.variant_id != self.variant_id
+            or item.baseline_variant_id != self.baseline_variant_id
+            for item in self.metric_deltas
+        ):
+            raise C008CCContractError(
+                "C metric delta summary contains source-inconsistent delta"
+            )
+        case_ids = {item.dataset_case_id for item in self.metric_deltas}
+        metric_names = {item.metric_name for item in self.metric_deltas}
+        case_metrics = {
+            (item.dataset_case_id, item.metric_name)
+            for item in self.metric_deltas
+        }
+        if (
+            len(case_ids) != 5
+            or len(metric_names) != 10
+            or len(case_metrics) != 50
+        ):
+            raise C008CCContractError(
+                "C metric delta summary must bind five cases x ten metrics"
+            )
+        comparable = tuple(
+            item
+            for item in self.metric_deltas
+            if item.delta_status is MetricDeltaStatus.COMPARABLE
+        )
+        expected = {
+            "comparable_count": len(comparable),
+            "equal_count": sum(
+                item.absolute_delta == Decimal("0") for item in comparable
+            ),
+            "non_zero_count": sum(
+                item.absolute_delta != Decimal("0") for item in comparable
+            ),
+            "unavailable_count": len(self.metric_deltas) - len(comparable),
+        }
+        for field_name, expected_value in expected.items():
+            _count(getattr(self, field_name), field_name)
+            if getattr(self, field_name) != expected_value:
+                raise C008CCContractError(
+                    f"{field_name} contradicts metric_deltas"
+                )
+        if self.metric_delta_summary_id != semantic_id(
+            self._PREFIX, self._identity_payload()
+        ):
+            raise C008CCContractError(
+                "C MetricDeltaSummary identity is not canonical"
+            )
+
+    def _identity_payload(self) -> dict[str, object]:
+        payload = self.to_dict()
+        del payload["metric_delta_summary_id"]
+        return payload
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "metric_delta_summary_id": self.metric_delta_summary_id,
+            "partition": self.partition.value,
+            "variant_id": self.variant_id,
+            "baseline_variant_id": self.baseline_variant_id,
+            "metric_deltas": [
+                item.to_dict() for item in self.metric_deltas
+            ],
+            "comparable_count": self.comparable_count,
+            "equal_count": self.equal_count,
+            "non_zero_count": self.non_zero_count,
+            "unavailable_count": self.unavailable_count,
+            "schema_version": self.schema_version,
+        }
+
+    @classmethod
+    def create(cls, **kwargs: object) -> Self:
+        payload = {
+            "partition": kwargs["partition"].value,  # type: ignore[union-attr]
+            "variant_id": kwargs["variant_id"],
+            "baseline_variant_id": kwargs["baseline_variant_id"],
+            "metric_deltas": [
+                item.to_dict()
+                for item in kwargs["metric_deltas"]  # type: ignore[union-attr]
+            ],
+            "comparable_count": kwargs["comparable_count"],
+            "equal_count": kwargs["equal_count"],
+            "non_zero_count": kwargs["non_zero_count"],
+            "unavailable_count": kwargs["unavailable_count"],
+            "schema_version": kwargs.get("schema_version", SCHEMA_VERSION),
+        }
+        return cls(
+            metric_delta_summary_id=semantic_id(cls._PREFIX, payload),
+            **kwargs,
+        )
+
+    @classmethod
+    def from_dict(cls, payload: Mapping[str, Any]) -> Self:
+        if set(payload) != {item.name for item in fields(cls)}:
+            raise C008CCContractError(
+                "serialized C MetricDeltaSummary fields are invalid"
+            )
+        try:
+            return cls(
+                metric_delta_summary_id=payload["metric_delta_summary_id"],
+                partition=C008CCPartition(payload["partition"]),
+                variant_id=payload["variant_id"],
+                baseline_variant_id=payload["baseline_variant_id"],
+                metric_deltas=tuple(
+                    C008CCMetricDelta.from_dict(item)
+                    for item in payload["metric_deltas"]
+                ),
+                comparable_count=payload["comparable_count"],
+                equal_count=payload["equal_count"],
+                non_zero_count=payload["non_zero_count"],
+                unavailable_count=payload["unavailable_count"],
+                schema_version=payload["schema_version"],
+            )
+        except (KeyError, TypeError, ValueError) as exc:
+            if isinstance(exc, C008CCContractError):
+                raise
+            raise C008CCContractError(
+                "serialized C MetricDeltaSummary is invalid"
             ) from exc
 
 
@@ -725,6 +1153,8 @@ __all__ = [
     "C008CCCaseResult",
     "C008CCContractError",
     "C008CCFixedCutoffComparison",
+    "C008CCMetricDelta",
+    "C008CCMetricDeltaSummary",
     "C008CCPartition",
     "C008CCReplayComparison",
 ]
