@@ -1,0 +1,54 @@
+{
+  "frames": [
+    {
+      "active_box": {"as_of_time": "2026-07-20T00:00:00+00:00", "confirm_time": "2026-07-20T00:00:00+00:00", "lower": "80", "origin_time": "2026-07-10T00:00:00+00:00", "status": "ACTIVE", "upper": "111"},
+      "as_of_time": "2026-07-20T00:00:00+00:00",
+      "resonance_zones": [
+        {"context_count": 1, "lower": "120", "member_count": 1, "quality_score": "0.600", "resonance_class": "SINGLE", "selection_score": "0.3600", "side": "UPPER", "upper": "121"},
+        {"context_count": 1, "lower": "110", "member_count": 2, "quality_score": "0.37500", "resonance_class": "LOCAL_CLUSTER", "selection_score": "0.300000", "side": "UPPER", "upper": "111"},
+        {"context_count": 1, "lower": "80", "member_count": 1, "quality_score": "0.600", "resonance_class": "SINGLE", "selection_score": "0.37200", "side": "LOWER", "upper": "81"},
+        {"context_count": 1, "lower": "90", "member_count": 1, "quality_score": "0.300", "resonance_class": "SINGLE", "selection_score": "0.24600", "side": "LOWER", "upper": "91"}
+      ],
+      "structures": [
+        {"confirm_time": "2026-07-20T00:00:00+00:00", "context": {"scale": "macro", "timeframe": "H12"}, "lifecycle_state": "FRESH", "origin_time": "2026-07-10T00:00:00+00:00", "price_range": {"high": "81", "low": "80"}, "side": "LOWER", "state_confirm_time": "2026-07-20T00:00:00+00:00", "subject_id": "lower-macro", "tier": "CANDIDATE", "touch_count": 0},
+        {"confirm_time": "2026-07-20T00:00:00+00:00", "context": {"scale": "primary", "timeframe": "H4"}, "lifecycle_state": "FRESH", "origin_time": "2026-07-10T00:00:00+00:00", "price_range": {"high": "91", "low": "90"}, "side": "LOWER", "state_confirm_time": "2026-07-20T00:00:00+00:00", "subject_id": "lower-main", "tier": "CANDIDATE", "touch_count": 0},
+        {"confirm_time": "2026-07-20T00:00:00+00:00", "context": {"scale": "macro", "timeframe": "H12"}, "lifecycle_state": "FRESH", "origin_time": "2026-07-10T00:00:00+00:00", "price_range": {"high": "121", "low": "120"}, "side": "UPPER", "state_confirm_time": "2026-07-20T00:00:00+00:00", "subject_id": "upper-macro", "tier": "CANDIDATE", "touch_count": 0},
+        {"confirm_time": "2026-07-20T00:00:00+00:00", "context": {"scale": "primary", "timeframe": "H4"}, "lifecycle_state": "FRESH", "origin_time": "2026-07-10T00:00:00+00:00", "price_range": {"high": "111", "low": "110"}, "side": "UPPER", "state_confirm_time": "2026-07-20T00:00:00+00:00", "subject_id": "upper-a-old", "tier": "CANDIDATE", "touch_count": 0},
+        {"confirm_time": "2026-07-20T00:00:00+00:00", "context": {"scale": "primary", "timeframe": "H4"}, "lifecycle_state": "FRESH", "origin_time": "2026-07-10T00:00:00+00:00", "price_range": {"high": "111", "low": "110.5"}, "side": "UPPER", "state_confirm_time": "2026-07-20T00:00:00+00:00", "subject_id": "upper-z-new", "tier": "CANDIDATE", "touch_count": 0}
+      ]
+    },
+    {
+      "active_box": {"as_of_time": "2026-07-20T03:00:00+00:00", "confirm_time": "2026-07-20T01:00:00+00:00", "lower": "90", "origin_time": "2026-07-10T00:00:00+00:00", "status": "ACTIVE", "upper": "111"},
+      "as_of_time": "2026-07-20T03:00:00+00:00",
+      "resonance_zones": [
+        {"context_count": 1, "lower": "110", "member_count": 2, "quality_score": "0.6899999999999999999999999999", "resonance_class": "LOCAL_CLUSTER", "selection_score": "0.5933999999999999999999999999", "side": "UPPER", "upper": "111"},
+        {"context_count": 1, "lower": "120", "member_count": 1, "quality_score": "0.525000", "resonance_class": "SINGLE", "selection_score": "0.34650000", "side": "UPPER", "upper": "121"},
+        {"context_count": 1, "lower": "90", "member_count": 1, "quality_score": "0.5519999999999999999999999999", "resonance_class": "SINGLE", "selection_score": "0.4195199999999999999999999999", "side": "LOWER", "upper": "91"},
+        {"context_count": 1, "lower": "80", "member_count": 1, "quality_score": "0.525000", "resonance_class": "SINGLE", "selection_score": "0.29400000", "side": "LOWER", "upper": "81"}
+      ],
+      "structures": [
+        {"confirm_time": "2026-07-20T00:00:00+00:00", "context": {"scale": "macro", "timeframe": "H12"}, "lifecycle_state": "FRESH", "origin_time": "2026-07-10T00:00:00+00:00", "price_range": {"high": "81", "low": "80"}, "side": "LOWER", "state_confirm_time": "2026-07-20T00:00:00+00:00", "subject_id": "lower-macro", "tier": "CANDIDATE", "touch_count": 0},
+        {"confirm_time": "2026-07-20T02:00:00+00:00", "context": {"scale": "primary", "timeframe": "H4"}, "lifecycle_state": "WEAKENED", "origin_time": "2026-07-10T00:00:00+00:00", "price_range": {"high": "91", "low": "90"}, "side": "LOWER", "state_confirm_time": "2026-07-20T02:00:00+00:00", "subject_id": "lower-main", "tier": "CONFIRMED", "touch_count": 2},
+        {"confirm_time": "2026-07-20T00:00:00+00:00", "context": {"scale": "macro", "timeframe": "H12"}, "lifecycle_state": "FRESH", "origin_time": "2026-07-10T00:00:00+00:00", "price_range": {"high": "121", "low": "120"}, "side": "UPPER", "state_confirm_time": "2026-07-20T00:00:00+00:00", "subject_id": "upper-macro", "tier": "CANDIDATE", "touch_count": 0},
+        {"confirm_time": "2026-07-20T02:00:00+00:00", "context": {"scale": "primary", "timeframe": "H4"}, "lifecycle_state": "WEAKENED", "origin_time": "2026-07-10T00:00:00+00:00", "price_range": {"high": "111", "low": "110"}, "side": "UPPER", "state_confirm_time": "2026-07-20T02:00:00+00:00", "subject_id": "upper-a-old", "tier": "CONFIRMED", "touch_count": 2},
+        {"confirm_time": "2026-07-20T02:00:00+00:00", "context": {"scale": "primary", "timeframe": "H4"}, "lifecycle_state": "WEAKENED", "origin_time": "2026-07-10T00:00:00+00:00", "price_range": {"high": "111", "low": "110.5"}, "side": "UPPER", "state_confirm_time": "2026-07-20T02:00:00+00:00", "subject_id": "upper-z-new", "tier": "CONFIRMED", "touch_count": 2}
+      ]
+    }
+  ],
+  "lifecycle_transitions": [
+    {"confirm_time": "2026-07-20T00:00:00+00:00", "event_type": "ACTIVATED", "from_state": "CONFIRMED", "origin_time": "2026-07-20T00:00:00+00:00", "subject_id": "lower-macro", "to_state": "FRESH"},
+    {"confirm_time": "2026-07-20T00:00:00+00:00", "event_type": "ACTIVATED", "from_state": "CONFIRMED", "origin_time": "2026-07-20T00:00:00+00:00", "subject_id": "lower-main", "to_state": "FRESH"},
+    {"confirm_time": "2026-07-20T00:00:00+00:00", "event_type": "ACTIVATED", "from_state": "CONFIRMED", "origin_time": "2026-07-20T00:00:00+00:00", "subject_id": "upper-a-old", "to_state": "FRESH"},
+    {"confirm_time": "2026-07-20T00:00:00+00:00", "event_type": "ACTIVATED", "from_state": "CONFIRMED", "origin_time": "2026-07-20T00:00:00+00:00", "subject_id": "upper-macro", "to_state": "FRESH"},
+    {"confirm_time": "2026-07-20T00:00:00+00:00", "event_type": "ACTIVATED", "from_state": "CONFIRMED", "origin_time": "2026-07-20T00:00:00+00:00", "subject_id": "upper-z-new", "to_state": "FRESH"},
+    {"confirm_time": "2026-07-20T01:00:00+00:00", "event_type": "TEST", "from_state": "FRESH", "origin_time": "2026-07-20T00:00:00+00:00", "subject_id": "lower-main", "to_state": "TESTED"},
+    {"confirm_time": "2026-07-20T01:00:00+00:00", "event_type": "TEST", "from_state": "FRESH", "origin_time": "2026-07-20T00:00:00+00:00", "subject_id": "upper-a-old", "to_state": "TESTED"},
+    {"confirm_time": "2026-07-20T01:00:00+00:00", "event_type": "TEST", "from_state": "FRESH", "origin_time": "2026-07-20T00:00:00+00:00", "subject_id": "upper-z-new", "to_state": "TESTED"},
+    {"confirm_time": "2026-07-20T02:00:00+00:00", "event_type": "WEAKENED", "from_state": "TESTED", "origin_time": "2026-07-20T01:00:00+00:00", "subject_id": "lower-main", "to_state": "WEAKENED"},
+    {"confirm_time": "2026-07-20T02:00:00+00:00", "event_type": "WEAKENED", "from_state": "TESTED", "origin_time": "2026-07-20T01:00:00+00:00", "subject_id": "upper-a-old", "to_state": "WEAKENED"},
+    {"confirm_time": "2026-07-20T02:00:00+00:00", "event_type": "WEAKENED", "from_state": "TESTED", "origin_time": "2026-07-20T01:00:00+00:00", "subject_id": "upper-z-new", "to_state": "WEAKENED"}
+  ],
+  "purpose": "C-009 Pine migration parity fixture; not C-008 evidence",
+  "sample": {"frame_count": 2, "run_id": "msa-core-run-v1-15de89a73398f0dd4e008ae20a07d199637eccf5b8cf57ffcdf75cd32f3c56e9", "sample_id": "core-alpha-v1-deterministic-fixture"},
+  "schema_version": 1
+}

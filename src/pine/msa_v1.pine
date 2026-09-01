@@ -1,0 +1,385 @@
+//@version=6
+// MSA V1 Pine Indicator Candidate — C-009-A
+//
+// Causal contract:
+// - OriginTime is the pivot bar's time; ConfirmTime is the bar where all right
+//   pivot bars are complete; AsOfTime is the current completed chart bar.
+// - Lines may backdraw to OriginTime only after confirmation.  All state,
+//   resonance, zone and ActiveBox calculations begin at ConfirmTime.
+// - request.security reads an offset HTF result ([1]) with lookahead_on and
+//   gaps_on. Thus a HTF pivot reaches this script only after its HTF bar closed;
+//   no unfinished HTF value is used.
+
+indicator("MSA V1 Candidate [C-009-A]", overlay = true, max_lines_count = 500, max_boxes_count = 200, max_labels_count = 50)
+
+// Python Core Alpha v1 defaults: reference H1, primary H4, macro H12.
+groupCore = "MSA Core / Causal structure"
+pivotLeft = input.int(3, "Pivot left bars", minval = 1, group = groupCore)
+pivotRight = input.int(3, "Pivot right bars", minval = 1, group = groupCore)
+htf1 = input.timeframe("240", "Higher TF 1 / primary", group = groupCore)
+htf2 = input.timeframe("720", "Higher TF 2 / macro", group = groupCore)
+testTolerance = input.float(1.0, "Lifecycle test tolerance", minval = 0.0, step = 0.1, group = groupCore)
+breakBuffer = input.float(1.0, "Lifecycle break buffer", minval = 0.0, step = 0.1, group = groupCore)
+flipTolerance = input.float(1.0, "Lifecycle flip tolerance", minval = 0.0, step = 0.1, group = groupCore)
+flipDistance = input.float(1.0, "Lifecycle flip confirmation distance", minval = 0.0, step = 0.1, group = groupCore)
+weakeningTests = input.int(2, "Lifecycle weakening test count", minval = 2, group = groupCore)
+minimumTestSeparation = input.int(1, "Minimum test separation bars", minval = 1, group = groupCore)
+flipHorizon = input.int(12, "Flip horizon bars", minval = 1, group = groupCore)
+
+groupResonance = "Resonance / ActiveBox"
+clusterTolerance = input.float(1.0, "Zone clustering tolerance", minval = 0.000001, step = 0.1, group = groupResonance)
+distanceHorizon = input.float(50.0, "Selection distance horizon", minval = 0.000001, step = 1.0, group = groupResonance)
+minimumSelectionScore = input.float(0.25, "Minimum ActiveBox selection score", minval = 0.0, step = 0.01, group = groupResonance)
+replacementDistanceMargin = input.float(1.0, "ActiveBox replacement distance margin", minval = 0.0, step = 0.1, group = groupResonance)
+replacementScoreImprovement = input.float(0.1, "ActiveBox replacement score improvement", minval = 0.0, step = 0.01, group = groupResonance)
+
+groupDisplay = "Display / object budget"
+showCandidates = input.bool(false, "Show forming current-TF candidates", group = groupDisplay)
+showZones = input.bool(true, "Show Resonance Zones", group = groupDisplay)
+showActiveBox = input.bool(true, "Show ActiveBox", group = groupDisplay)
+maxStructures = input.int(80, "Max retained structures", minval = 10, maxval = 150, group = groupDisplay)
+maxZones = input.int(30, "Max retained historical zones", minval = 2, maxval = 80, group = groupDisplay)
+maxBoxes = input.int(20, "Max retained frozen ActiveBoxes", minval = 1, maxval = 50, group = groupDisplay)
+debugMode = input.bool(false, "Debug / Validation Mode", group = groupDisplay)
+
+// side: +1 = upper/resistance, -1 = lower/support.
+// lifecycle: 0 FRESH, 1 TESTED, 2 WEAKENED, 3 BROKEN, 4 FLIPPED, 5 RETIRED.
+type MsaStructure
+    int originTime
+    int confirmTime
+    int confirmIndex
+    float price
+    int side
+    int effectiveSide
+    int scale
+    int lifecycle
+    int touchCount
+    int lastTouchIndex
+    int breakIndex
+    int flipTouchIndex
+    line levelLine
+
+type MsaZone
+    bool valid
+    float lower
+    float upper
+    float quality
+    float selection
+    float distance
+    int members
+    int contexts
+    int resonanceClass
+
+var array<MsaStructure> structures = array.new<MsaStructure>()
+var array<box> historicalZones = array.new<box>()
+var array<box> frozenBoxes = array.new<box>()
+var box upperZoneBox = na
+var box lowerZoneBox = na
+var float upperZoneLower = na
+var float upperZoneUpper = na
+var float lowerZoneLower = na
+var float lowerZoneUpper = na
+var int upperZoneStart = na
+var int lowerZoneStart = na
+var box activeBox = na
+var float activeUpper = na
+var float activeLower = na
+var float activeUpperScore = na
+var float activeLowerScore = na
+var float activeUpperDistance = na
+var float activeLowerDistance = na
+var int activeStart = na
+var table debugTable = table.new(position.top_right, 2, 7, border_width = 1)
+
+f_structure_color(int scale, int lifecycle) =>
+    color base = scale == 2 ? color.aqua : scale == 1 ? color.teal : color.yellow
+    lifecycle == 3 or lifecycle == 5 ? color.new(color.gray, 65) : base
+
+f_structure_style(int lifecycle) =>
+    lifecycle == 3 or lifecycle == 5 ? line.style_dotted : lifecycle == 1 or lifecycle == 2 ? line.style_dashed : line.style_solid
+
+f_is_effective(MsaStructure item) =>
+    item.lifecycle != 3 and item.lifecycle != 5
+
+f_delete_structure(MsaStructure item) =>
+    if not na(item.levelLine)
+        line.delete(item.levelLine)
+
+f_make_room() =>
+    bool room = true
+    if array.size(structures) >= maxStructures
+        int retiredIndex = na
+        if array.size(structures) > 0
+            for i = 0 to array.size(structures) - 1
+                MsaStructure item = array.get(structures, i)
+                if item.lifecycle == 5 and na(retiredIndex)
+                    retiredIndex := i
+        if not na(retiredIndex)
+            MsaStructure retired = array.get(structures, retiredIndex)
+            f_delete_structure(retired)
+            array.remove(structures, retiredIndex)
+        else
+            // Do not evict an object still used by lifecycle/resonance/ActiveBox.
+            room := false
+    room
+
+f_add_structure(int originTime, int confirmTime, float price, int side, int scale) =>
+    if f_make_room()
+        color lineColor = f_structure_color(scale, 0)
+        line created = line.new(originTime, price, time, price, xloc = xloc.bar_time, extend = extend.none, color = lineColor, style = line.style_solid, width = scale == 0 ? 1 : 2)
+        MsaStructure item = MsaStructure.new(originTime, confirmTime, bar_index, price, side, side, scale, 0, 0, na, na, na, created)
+        array.push(structures, item)
+
+f_update_structures() =>
+    if array.size(structures) > 0
+        for i = 0 to array.size(structures) - 1
+            MsaStructure item = array.get(structures, i)
+            int nextLifecycle = item.lifecycle
+            int nextEffectiveSide = item.effectiveSide
+            int nextTouches = item.touchCount
+            int nextLastTouch = item.lastTouchIndex
+            int nextBreak = item.breakIndex
+            int nextFlipTouch = item.flipTouchIndex
+            // A newly confirmed item is never processed before ConfirmTime.
+            if barstate.isconfirmed and time_close >= item.confirmTime and item.lifecycle != 5 and bar_index > item.confirmIndex
+                if item.lifecycle == 3
+                    int sinceBreak = bar_index - item.breakIndex
+                    bool failedBreak = item.side == 1 ? close <= item.price - breakBuffer : close >= item.price + breakBuffer
+                    bool flipTouch = high >= item.price - flipTolerance and low <= item.price + flipTolerance
+                    bool flipConfirmed = item.side == 1 ? close >= item.price + flipTolerance + flipDistance : close <= item.price - flipTolerance - flipDistance
+                    if failedBreak or sinceBreak >= flipHorizon
+                        nextLifecycle := 5
+                    else if na(item.flipTouchIndex) and flipTouch
+                        nextFlipTouch := bar_index
+                    else if not na(item.flipTouchIndex) and bar_index > item.flipTouchIndex and flipConfirmed
+                        nextLifecycle := 4
+                        nextEffectiveSide := -item.side
+                else if item.lifecycle != 4
+                    bool breaks = item.side == 1 ? close >= item.price + breakBuffer : close <= item.price - breakBuffer
+                    bool touches = high >= item.price - testTolerance and low <= item.price + testTolerance
+                    bool separated = na(item.lastTouchIndex) or bar_index - item.lastTouchIndex >= minimumTestSeparation
+                    if breaks
+                        nextLifecycle := 3
+                        nextBreak := bar_index
+                    else if touches and separated
+                        nextTouches := item.touchCount + 1
+                        nextLastTouch := bar_index
+                        if item.lifecycle == 0
+                            nextLifecycle := 1
+                        else if item.lifecycle == 1 and nextTouches >= weakeningTests
+                            nextLifecycle := 2
+            if not na(item.levelLine)
+                line.set_x2(item.levelLine, time)
+                line.set_color(item.levelLine, f_structure_color(item.scale, nextLifecycle))
+                line.set_style(item.levelLine, f_structure_style(nextLifecycle))
+            array.set(structures, i, MsaStructure.new(item.originTime, item.confirmTime, item.confirmIndex, item.price, item.side, nextEffectiveSide, item.scale, nextLifecycle, nextTouches, nextLastTouch, nextBreak, nextFlipTouch, item.levelLine))
+
+f_distance_to_expected(float price, int side) =>
+    side == 1 ? price - close : close - price
+
+f_lifecycle_weight(int lifecycle) =>
+    lifecycle == 0 ? 1.0 : lifecycle == 1 ? 0.9 : lifecycle == 2 ? 0.8 : 0.7
+
+f_context_weight(int scale) =>
+    // H4=1 and H12=2 are the Core Alpha weights. Current TF is a documented
+    // Pine-only display context and receives candidate-tier-like weight 0.5.
+    scale == 2 ? 2.0 : scale == 1 ? 1.0 : 0.5
+
+f_zone_for_side(int targetSide) =>
+    float anchor = na
+    float bestDistance = na
+    if array.size(structures) > 0
+        for i = 0 to array.size(structures) - 1
+            MsaStructure item = array.get(structures, i)
+            bool expected = item.effectiveSide == targetSide and f_is_effective(item) and (targetSide == 1 ? item.price >= close : item.price <= close)
+            if expected
+                float itemDistance = f_distance_to_expected(item.price, targetSide)
+                if na(bestDistance) or itemDistance < bestDistance
+                    bestDistance := itemDistance
+                    anchor := item.price
+    bool valid = not na(anchor)
+    float zoneLower = na
+    float zoneUpper = na
+    float quality = 0.0
+    int members = 0
+    int currentMembers = 0
+    int htf1Members = 0
+    int htf2Members = 0
+    if valid and array.size(structures) > 0
+        for i = 0 to array.size(structures) - 1
+            MsaStructure item = array.get(structures, i)
+            bool included = item.effectiveSide == targetSide and f_is_effective(item) and math.abs(item.price - anchor) <= clusterTolerance
+            if included
+                float ageSeconds = math.max(0.0, (time_close - item.confirmTime) / 1000.0)
+                float freshness = math.max(0.2, 1.0 - ageSeconds / 86400.0)
+                float touch = math.max(0.5, 1.0 - math.max(0, item.touchCount - 1) * 0.1)
+                quality += f_context_weight(item.scale) * f_lifecycle_weight(item.lifecycle) * freshness * touch
+                zoneLower := na(zoneLower) ? item.price : math.min(zoneLower, item.price)
+                zoneUpper := na(zoneUpper) ? item.price : math.max(zoneUpper, item.price)
+                members += 1
+                currentMembers += item.scale == 0 ? 1 : 0
+                htf1Members += item.scale == 1 ? 1 : 0
+                htf2Members += item.scale == 2 ? 1 : 0
+    int contexts = (currentMembers > 0 ? 1 : 0) + (htf1Members > 0 ? 1 : 0) + (htf2Members > 0 ? 1 : 0)
+    quality += math.min(1.0, math.max(0, contexts - 1) * 0.3)
+    float distance = valid ? f_distance_to_expected(targetSide == 1 ? zoneLower : zoneUpper, targetSide) : na
+    float distanceFactor = valid ? math.max(0.0, 1.0 - distance / distanceHorizon) : 0.0
+    float selection = quality * distanceFactor
+    int resonanceClass = members == 1 ? 0 : members >= 2 and contexts >= 2 ? 2 : 1
+    MsaZone.new(valid and distanceFactor > 0, zoneLower, zoneUpper, quality, selection, distance, members, contexts, resonanceClass)
+
+f_push_historical_zone(box value) =>
+    if not na(value)
+        if array.size(historicalZones) >= maxZones
+            box oldest = array.shift(historicalZones)
+            box.delete(oldest)
+        array.push(historicalZones, value)
+
+f_freeze_box(box value) =>
+    if not na(value)
+        box.set_right(value, time)
+        if array.size(frozenBoxes) >= maxBoxes
+            box oldest = array.shift(frozenBoxes)
+            box.delete(oldest)
+        array.push(frozenBoxes, value)
+
+// Forming candidates use only left-context information and never enter arrays.
+formingHigh = high == ta.highest(high, pivotLeft + 1)
+formingLow = low == ta.lowest(low, pivotLeft + 1)
+plotshape(showCandidates and formingHigh, title = "Forming upper candidate", style = shape.circle, location = location.abovebar, color = color.new(color.lime, 35), size = size.tiny)
+plotshape(showCandidates and formingLow, title = "Forming lower candidate", style = shape.circle, location = location.belowbar, color = color.new(color.lime, 35), size = size.tiny)
+
+// Current-TF pivots are known only on this bar after pivotRight completed bars.
+currentHigh = ta.pivothigh(high, pivotLeft, pivotRight)
+currentLow = ta.pivotlow(low, pivotLeft, pivotRight)
+
+// `[1]` refers to the completed source HTF bar; with lookahead_on it becomes
+// available at the next HTF boundary without exposing a developing HTF value.
+// This is deliberately conservative: a candidate may be displayed one chart
+// bar later, but never earlier than its recorded HTF ConfirmTime.
+[htf1High, htf1Low, htf1OriginTime, htf1ConfirmTime] = request.security(syminfo.tickerid, htf1, [ta.pivothigh(high, pivotLeft, pivotRight)[1], ta.pivotlow(low, pivotLeft, pivotRight)[1], time[pivotRight + 1], time_close[1]], gaps = barmerge.gaps_on, lookahead = barmerge.lookahead_on)
+[htf2High, htf2Low, htf2OriginTime, htf2ConfirmTime] = request.security(syminfo.tickerid, htf2, [ta.pivothigh(high, pivotLeft, pivotRight)[1], ta.pivotlow(low, pivotLeft, pivotRight)[1], time[pivotRight + 1], time_close[1]], gaps = barmerge.gaps_on, lookahead = barmerge.lookahead_on)
+
+bool newConfirmedStructure = false
+if barstate.isconfirmed
+    if not na(currentHigh)
+        f_add_structure(time[pivotRight], time_close, currentHigh, 1, 0)
+        newConfirmedStructure := true
+    if not na(currentLow)
+        f_add_structure(time[pivotRight], time_close, currentLow, -1, 0)
+        newConfirmedStructure := true
+    if not na(htf1High)
+        f_add_structure(htf1OriginTime, htf1ConfirmTime, htf1High, 1, 1)
+        newConfirmedStructure := true
+    if not na(htf1Low)
+        f_add_structure(htf1OriginTime, htf1ConfirmTime, htf1Low, -1, 1)
+        newConfirmedStructure := true
+    if not na(htf2High)
+        f_add_structure(htf2OriginTime, htf2ConfirmTime, htf2High, 1, 2)
+        newConfirmedStructure := true
+    if not na(htf2Low)
+        f_add_structure(htf2OriginTime, htf2ConfirmTime, htf2Low, -1, 2)
+        newConfirmedStructure := true
+    f_update_structures()
+
+MsaZone upperZone = f_zone_for_side(1)
+MsaZone lowerZone = f_zone_for_side(-1)
+
+bool upperZoneChanged = upperZone.valid and (na(upperZoneLower) or upperZone.lower != upperZoneLower or upperZone.upper != upperZoneUpper)
+bool lowerZoneChanged = lowerZone.valid and (na(lowerZoneLower) or lowerZone.lower != lowerZoneLower or lowerZone.upper != lowerZoneUpper)
+
+if showZones
+    if upperZone.valid
+        if upperZoneChanged
+            if not na(upperZoneBox)
+                f_push_historical_zone(upperZoneBox)
+            upperZoneStart := time
+            upperZoneBox := box.new(upperZoneStart, upperZone.upper, time, upperZone.lower, xloc = xloc.bar_time, bgcolor = color.new(color.aqua, 87), border_color = color.new(color.aqua, 25))
+        else if not na(upperZoneBox)
+            box.set_right(upperZoneBox, time)
+    else if not na(upperZoneBox)
+        f_push_historical_zone(upperZoneBox)
+        upperZoneBox := na
+    if lowerZone.valid
+        if lowerZoneChanged
+            if not na(lowerZoneBox)
+                f_push_historical_zone(lowerZoneBox)
+            lowerZoneStart := time
+            lowerZoneBox := box.new(lowerZoneStart, lowerZone.upper, time, lowerZone.lower, xloc = xloc.bar_time, bgcolor = color.new(color.blue, 87), border_color = color.new(color.blue, 25))
+        else if not na(lowerZoneBox)
+            box.set_right(lowerZoneBox, time)
+    else if not na(lowerZoneBox)
+        f_push_historical_zone(lowerZoneBox)
+        lowerZoneBox := na
+else
+    if not na(upperZoneBox)
+        box.delete(upperZoneBox)
+        upperZoneBox := na
+    if not na(lowerZoneBox)
+        box.delete(lowerZoneBox)
+        lowerZoneBox := na
+
+upperZoneLower := upperZone.valid ? upperZone.lower : na
+upperZoneUpper := upperZone.valid ? upperZone.upper : na
+lowerZoneLower := lowerZone.valid ? lowerZone.lower : na
+lowerZoneUpper := lowerZone.valid ? lowerZone.upper : na
+
+bool hasQualifiedPair = upperZone.valid and lowerZone.valid and upperZone.selection >= minimumSelectionScore and lowerZone.selection >= minimumSelectionScore
+bool activeBoxChanged = false
+if hasQualifiedPair
+    bool replaceUpper = na(activeUpper) or upperZone.distance < activeUpperDistance - replacementDistanceMargin or (upperZone.distance <= activeUpperDistance and upperZone.selection > activeUpperScore + replacementScoreImprovement)
+    bool replaceLower = na(activeLower) or lowerZone.distance < activeLowerDistance - replacementDistanceMargin or (lowerZone.distance <= activeLowerDistance and lowerZone.selection > activeLowerScore + replacementScoreImprovement)
+    if replaceUpper or replaceLower
+        f_freeze_box(activeBox)
+        activeBox := na
+        activeUpper := upperZone.upper
+        activeLower := lowerZone.lower
+        activeUpperScore := upperZone.selection
+        activeLowerScore := lowerZone.selection
+        activeUpperDistance := upperZone.distance
+        activeLowerDistance := lowerZone.distance
+        activeStart := time
+        if showActiveBox
+            activeBox := box.new(activeStart, activeUpper, time, activeLower, xloc = xloc.bar_time, bgcolor = color.new(color.orange, 88), border_color = color.new(color.orange, 0), border_width = 2)
+        activeBoxChanged := true
+    else if showActiveBox and not na(activeBox)
+        box.set_right(activeBox, time)
+else
+    if not na(activeUpper) or not na(activeLower)
+        f_freeze_box(activeBox)
+        activeBox := na
+        activeUpper := na
+        activeLower := na
+        activeUpperScore := na
+        activeLowerScore := na
+        activeUpperDistance := na
+        activeLowerDistance := na
+        activeStart := na
+        activeBoxChanged := true
+
+if not showActiveBox and not na(activeBox)
+    box.delete(activeBox)
+    activeBox := na
+
+// Alerts are emitted only for completed-bar causal state changes.
+alertcondition(newConfirmedStructure, "MSA confirmed structure", "MSA: a confirmed structure became available at ConfirmTime.")
+alertcondition(activeBoxChanged, "MSA ActiveBox changed", "MSA: ActiveBox changed at the current completed bar.")
+
+if barstate.islast
+    if debugMode
+        table.cell(debugTable, 0, 0, "MSA debug", text_color = color.white, bgcolor = color.gray)
+        table.cell(debugTable, 1, 0, "AsOf", text_color = color.white, bgcolor = color.gray)
+        table.cell(debugTable, 0, 1, "structures")
+        table.cell(debugTable, 1, 1, str.tostring(array.size(structures)))
+        table.cell(debugTable, 0, 2, "latest origin")
+        table.cell(debugTable, 1, 2, array.size(structures) > 0 ? str.format_time(array.get(structures, array.size(structures) - 1).originTime, "yyyy-MM-dd HH:mm") : "n/a")
+        table.cell(debugTable, 0, 3, "latest confirm")
+        table.cell(debugTable, 1, 3, array.size(structures) > 0 ? str.format_time(array.get(structures, array.size(structures) - 1).confirmTime, "yyyy-MM-dd HH:mm") : "n/a")
+        table.cell(debugTable, 0, 4, "upper / lower zone")
+        table.cell(debugTable, 1, 4, str.tostring(upperZone.selection, "#.###") + " / " + str.tostring(lowerZone.selection, "#.###"))
+        table.cell(debugTable, 0, 5, "ActiveBox")
+        table.cell(debugTable, 1, 5, na(activeUpper) ? "none" : str.tostring(activeLower, format.mintick) + " - " + str.tostring(activeUpper, format.mintick))
+        table.cell(debugTable, 0, 6, "state")
+        table.cell(debugTable, 1, 6, hasQualifiedPair ? "ACTIVE" : "NO ACTIVE BOX")
+    else
+        table.clear(debugTable, 0, 0, 1, 6)
